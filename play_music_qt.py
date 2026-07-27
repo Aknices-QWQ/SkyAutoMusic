@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 from sheet_updater import GITHUB_MIRRORS, install_sheet_update, read_local_state
 
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 if "__compiled__" in globals() or getattr(sys, "frozen", False):
     APP_DIR = Path(sys.executable).resolve().parent
 else:
@@ -166,6 +166,8 @@ class PlayerSignals(QObject):
     progress = Signal(int, str, str, list)
     finished = Signal(bool)
     status = Signal(str)
+    stop_requested = Signal()
+    toggle_overlay_requested = Signal()
 
 
 class UpdateSignals(QObject):
@@ -369,7 +371,7 @@ class MainWindow(QMainWindow):
         self.stop_event = threading.Event()
         self.seek_lock = threading.Lock()
         self.seek_request_index = None
-        self.global_escape_registered = False
+        self.global_hotkey_handles = []
         self.previewing = False
         self.preview_cache = {}
         self.preview_dir = Path(tempfile.gettempdir()) / "sky_auto_music_qt_preview"
@@ -379,6 +381,8 @@ class MainWindow(QMainWindow):
         self.signals.progress.connect(self.on_worker_progress)
         self.signals.finished.connect(self.on_worker_finished)
         self.signals.status.connect(self.set_status)
+        self.signals.stop_requested.connect(self.force_stop)
+        self.signals.toggle_overlay_requested.connect(self.toggle_overlay)
         self.update_signals = UpdateSignals()
         self.update_signals.progress.connect(self.on_update_progress)
         self.update_signals.finished.connect(self.on_update_finished)
@@ -400,12 +404,23 @@ class MainWindow(QMainWindow):
         self.escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self.escape_shortcut.setContext(Qt.ApplicationShortcut)
         self.escape_shortcut.activated.connect(self.force_stop)
+        f3_registered = False
         try:
             import keyboard
-            keyboard.add_hotkey("esc", self.force_stop, suppress=False)
-            self.global_escape_registered = True
+
+            self.global_hotkey_handles.append(
+                keyboard.add_hotkey("esc", self.signals.stop_requested.emit, suppress=False)
+            )
+            self.global_hotkey_handles.append(
+                keyboard.add_hotkey("f3", self.signals.toggle_overlay_requested.emit, suppress=False)
+            )
+            f3_registered = True
         except Exception:
-            self.global_escape_registered = False
+            pass
+        if not f3_registered:
+            self.overlay_shortcut = QShortcut(QKeySequence(Qt.Key_F3), self)
+            self.overlay_shortcut.setContext(Qt.ApplicationShortcut)
+            self.overlay_shortcut.activated.connect(self.toggle_overlay)
 
     def build_ui(self):
         tabs = QTabWidget()
@@ -437,7 +452,7 @@ class MainWindow(QMainWindow):
         brand_stack.addWidget(tagline)
         top_layout.addLayout(brand_stack)
         top_layout.addStretch()
-        shortcut_hint = QLabel("ESC 随时停止")
+        shortcut_hint = QLabel("F3 悬浮窗 · ESC 停止")
         shortcut_hint.setObjectName("ShortcutHint")
         top_layout.addWidget(shortcut_hint)
         page_layout.addWidget(top_bar)
@@ -685,7 +700,7 @@ class MainWindow(QMainWindow):
             "预览：先在本机试听键位与节奏，不会向游戏发送按键。",
             "进度：主窗口与悬浮窗都可拖动进度，松开后立即跳转。",
             "速度：1.00x 为原曲 BPM，其余倍率按原曲速度加速或减速。",
-            "悬浮窗：游戏中快速切歌、开始或停止演奏。",
+            "悬浮窗：按 F3 可随时开启或关闭，并可快速切歌、开始或停止演奏。",
             "紧急停止：任何时候按 ESC 都会立即释放全部按键。",
         ):
             line = QLabel(text)
@@ -1380,10 +1395,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent):
         self.stop_play()
-        if self.global_escape_registered:
+        if self.global_hotkey_handles:
             try:
                 import keyboard
-                keyboard.unhook_all_hotkeys()
+                for handle in self.global_hotkey_handles:
+                    keyboard.remove_hotkey(handle)
+                self.global_hotkey_handles.clear()
             except Exception:
                 pass
         self.save_config()
