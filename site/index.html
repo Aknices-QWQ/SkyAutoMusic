@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="SkyAutoMusic — 面向 Windows 的 Sky 光·遇自动演奏工具，支持悬浮控制、进度跳转、原曲 BPM 变速和在线曲库。">
+  <meta name="theme-color" content="#090f1b">
+  <title>SkyAutoMusic · 让每一次演奏更从容</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="SkyAutoMusic 首页">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <span>SkyAutoMusic</span>
+    </a>
+    <nav aria-label="主要导航">
+      <a href="#features">功能</a>
+      <a href="#download">下载</a>
+      <a class="nav-github" href="https://github.com/Aknices-QWQ/SkyAutoMusic" target="_blank" rel="noreferrer">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="status-dot"></span> Windows · 开源 · 普通用户权限</div>
+        <h1 id="hero-title">让每一次演奏，<br><span>更轻松，也更准确。</span></h1>
+        <p>为《Sky 光·遇》打造的自动演奏控制台。搜索曲库、试听键位、拖动进度，游戏中也能用轻巧的悬浮窗掌控整场演奏。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#download">选择版本下载</a>
+          <a class="button button-secondary" href="https://github.com/Aknices-QWQ/SkyAutoMusic" target="_blank" rel="noreferrer">查看源代码</a>
+        </div>
+        <dl class="hero-stats">
+          <div><dt id="sheet-count">17,700</dt><dd>首可用曲谱</dd></div>
+          <div><dt>1.00x</dt><dd>忠于原曲 BPM</dd></div>
+          <div><dt>SHA-256</dt><dd>下载完整性校验</dd></div>
+        </dl>
+      </div>
+
+      <div class="product-card" aria-label="产品能力摘要">
+        <div class="product-topbar">
+          <div><span></span><span></span><span></span></div>
+          <strong>SkyAutoMusic</strong>
+          <small>ESC 随时停止</small>
+        </div>
+        <div class="now-playing">
+          <small>当前曲目</small>
+          <strong>Call of Silence</strong>
+          <span>制谱 · Aknices&amp;&amp;BA4KQS</span>
+        </div>
+        <div class="timeline-row">
+          <span>1:15</span><div class="timeline"><i></i></div><span>2:16</span>
+        </div>
+        <div class="control-grid">
+          <div><small>相对原曲速率</small><strong>1.00x</strong></div>
+          <div><small>悬浮控制</small><strong>已就绪</strong></div>
+          <button type="button" tabindex="-1">开始演奏</button>
+          <button type="button" tabindex="-1">本地预览</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="features section" id="features" aria-labelledby="features-title">
+      <div class="section-heading">
+        <span>专注核心体验</span>
+        <h2 id="features-title">从选曲到演奏，一套界面完成</h2>
+      </div>
+      <div class="feature-grid">
+        <article><b>01</b><h3>进度自由跳转</h3><p>主窗口和悬浮窗都能拖动进度，演奏与预览中松手即跳转。</p></article>
+        <article><b>02</b><h3>原曲 BPM 变速</h3><p>以乐谱原始速度为基准加速或减速，1.00x 始终代表原速。</p></article>
+        <article><b>03</b><h3>小巧悬浮控制</h3><p>切歌、开始、停止与预览都在手边，不必反复离开游戏。</p></article>
+        <article><b>04</b><h3>在线曲库更新</h3><p>从 GitHub 获取完整曲库，内置国内镜像并在安装前校验文件。</p></article>
+      </div>
+    </section>
+
+    <section class="download-section section" id="download" aria-labelledby="download-title">
+      <div class="section-heading">
+        <span>立即开始</span>
+        <h2 id="download-title">选择适合你的版本</h2>
+        <p>两个版本均为 Windows 64 位免安装包，解压后双击运行。</p>
+      </div>
+
+      <div class="download-shell">
+        <div class="edition-list" role="radiogroup" aria-label="选择下载版本">
+          <label class="edition-card is-selected">
+            <input type="radio" name="edition" value="lite" checked>
+            <span class="edition-main"><strong>Lite 精简版</strong><small>内置两首定制曲，可在应用内更新完整曲库</small></span>
+            <span class="edition-size" id="lite-size">30.3 MB</span>
+          </label>
+          <label class="edition-card">
+            <input type="radio" name="edition" value="full">
+            <span class="edition-main"><strong>Full 完整版</strong><small>附带全部 17,700 首曲谱，解压即可离线使用</small></span>
+            <span class="edition-size" id="full-size">96.1 MB</span>
+          </label>
+        </div>
+
+        <div class="download-options">
+          <label for="mirror-select">下载线路</label>
+          <select id="mirror-select">
+            <option value="https://ghfast.top/">国内镜像 · ghfast.top</option>
+            <option value="https://gh-proxy.com/">备用镜像 · gh-proxy.com</option>
+            <option value="">GitHub 直连</option>
+          </select>
+          <a class="button button-primary download-button" id="download-button" href="#">下载 Lite 精简版</a>
+          <p class="download-meta"><span id="release-version">v1.0.0</span><span>·</span><span>Windows 64 位</span><span>·</span><span>免安装</span></p>
+          <div class="checksum-row">
+            <code id="checksum">SHA-256 加载中…</code>
+            <button type="button" id="copy-checksum">复制</button>
+          </div>
+          <p class="download-note" id="download-note">国内线路会通过所选镜像转发 GitHub Release 下载。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div><strong>SkyAutoMusic</strong><span>让音乐在云端相遇。</span></div>
+    <p>定制曲谱署名 Aknices&amp;&amp;BA4KQS · 基于 GPL-3.0 开源</p>
+  </footer>
+</body>
+</html>

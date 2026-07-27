@@ -1,85 +1,56 @@
-> 以下内容由AI生成，我懒得写README
+# SkyAutoMusic
 
-# SkyAutoMusic 自动弹琴
+SkyAutoMusic 是面向 Windows 的《Sky 光·遇》自动演奏工具，提供现代化 PySide6 界面、悬浮控制、曲目预览、进度跳转和在线曲库更新。
 
-## 项目简介
-SkyAutoMusic 是一款用于自动演奏《Sky光遇》等游戏内乐器的Python工具。支持多乐谱选择、按键映射、现代美观的GUI界面、全局热键控制，并可自动检测并置顶游戏窗口。
+## 下载
 
-## 主要功能
-- 支持多份JSON格式乐谱，自动识别并选择
-- 支持自定义音符-按键映射
-- 现代美观的图形界面（Tkinter）
-- 支持多键同时按下，节奏精准
-- 全局热键控制（可自定义/重置）
-- 自动检测并置顶Sky/光遇游戏窗口
-- 收藏曲谱、分页切换（全部/收藏）
-- 乐谱信息悬停显示与走马灯效果
-- 右侧主控区展示详细乐谱信息（歌名、作者、制谱人、文件名）
-- 自动读取BPM，节奏自适应
-- 窗口大小和位置自动保存，下次启动自动恢复
-- 适配Windows平台
+请从 [sky.xxlab.dev](https://sky.xxlab.dev) 下载：
 
-## 安装依赖
-建议使用Python 3.8及以上版本。
+- **Lite 精简版**：体积更小，内置《最后一吻》和《Call of Silence》，首次启动后可从 GitHub 更新完整曲库。
+- **Full 完整版**：附带全部曲目，解压后即可离线使用。
+- 国内网络可以在网站或应用内选择预设 GitHub 镜像线路。
 
-```bash
-pip install pyautogui keyboard psutil pywin32
+下载 ZIP 后解压，双击 `SkyAutoMusic.exe` 即可。程序使用普通用户权限运行，不需要管理员权限。
+
+## 功能
+
+- 搜索、收藏和快速切换 JSON 曲谱
+- 主窗口与悬浮窗同步播放控制
+- 本机音色预览，不向游戏发送按键
+- 演奏或预览中拖动进度并立即跳转
+- 速度按原曲 BPM 倍率缩放，`1.00x` 即原速
+- 随机延迟与错键效果
+- `Esc` 随时停止并释放全部按键
+- 从 GitHub Release 在线更新曲库，支持 SHA-256 校验和国内镜像
+
+## 从源码运行
+
+需要 Windows、Python 3.11 或更高版本。
+
+```powershell
+python -m pip install -r requirements.txt
+python play_music_qt.py
 ```
 
-## 使用方法
-1. 将乐谱（JSON格式，结构见示例）放入 `Sheet Music` 文件夹。
-2. 运行 `play_music_gui.py`：
-   ```bash
-   python play_music_gui.py
-   ```
-3. 在界面中选择乐谱，点击"开始演奏"或使用热键（默认F5/F7）控制。
-4. 可在"说明"页查看作者主页、交流群等信息。
-5. 右键曲谱可收藏/取消收藏，分页切换显示全部或收藏曲谱。
-6. 程序会自动检测Sky/光遇窗口并置顶，未检测到会提示。
-7. 窗口大小和位置、收藏数据等会自动保存，无需手动配置。
+## 构建
 
-## 乐谱文件格式说明
-- 乐谱为JSON文件，需包含`songNotes`字段。
-- 示例结构：
-```json
-[
-  {
-    "name": "Army Dreamers (json)",
-    ...,
-    "songNotes": [
-      {"time": 948, "key": "1Key0"},
-      {"time": 948, "key": "1Key2"},
-      ...
-    ]
-  }
-]
+发布包使用 Nuitka standalone 构建，未使用 PyInstaller：
+
+```powershell
+python -m pip install nuitka ordered-set zstandard
+python -m nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable --include-package=keyboard play_music_qt.py
 ```
-- 同一time下的多个key表示同时按下。
-- 支持多种乐谱结构，自动兼容解析。
 
-## 特色功能说明
-- **收藏与分页**：右键曲谱可收藏，分页按钮切换显示全部/收藏曲谱。
-- **乐谱信息展示**：右侧主控区高亮显示歌名、作者、制谱人、文件名。
-- **BPM节奏适配**：自动读取乐谱bpm字段，按bpm自动调整演奏节奏。
-- **窗口与配置**：窗口大小、位置、收藏等均自动保存，无需手动配置。
-- **资源路径适配**：所有资源文件（config.json、favorites.json、Sheet Music）均自动适配开发和打包环境，无需修改路径。
+## 曲谱格式
 
-## 常见问题
-- **找不到乐谱/收藏/配置文件？**
-  - 请确保`Sheet Music`、`config.json`、`favorites.json`在项目目录下。
-  - 程序已自动适配路径，无需手动调整。
-- **窗口大小和位置未保存？**
-  - 程序关闭时会自动保存窗口配置到config.json，重新打开会自动恢复。
-- **热键无效？**
-  - 请以管理员身份运行程序，或更换为未被系统占用的热键。
-- **按键映射不符？**
-  - 请在代码中修改`note_to_key`字典。
-- **其它问题**
-  - 如遇异常可反馈至作者主页或交流群。
+将 JSON 文件放入 `Sheet Music` 文件夹。乐谱需要包含 `songNotes` 数组；同一 `time` 下的多个 `key` 会同时按下。
 
-## 免责声明
-本工具仅供学习与娱乐，请勿用于破坏游戏公平性。
+## 署名
 
----
+《最后一吻》和《Call of Silence》制谱署名：`Aknices&&BA4KQS`。
 
-如有新功能或需求，README会实时更新。 
+项目基于 [Tloml-Starry/SkyAutoMusic](https://github.com/Tloml-Starry/SkyAutoMusic) 继续开发；Fork 保留完整提交历史与原始来源。
+
+## 许可
+
+本项目以 GNU General Public License v3.0 发布，详见 [LICENSE](LICENSE)。曲谱内容的权利归各自创作者及权利人所有。
