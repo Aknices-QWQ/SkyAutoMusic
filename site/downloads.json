@@ -4,16 +4,16 @@
     "released_at": "2026-07-27",
     "repository": "https://github.com/Aknices-QWQ/SkyAutoMusic",
     "lite": {
-      "name": "SkyAutoMusic-v1.0.0-Lite-win64.zip",
-      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.0/SkyAutoMusic-v1.0.0-Lite-win64.zip",
-      "size": 31725658,
-      "sha256": "e71b7c78d48a637e8186cc551e75efedfde09a5ba911dce189d9a303625b87fa"
+      "name": "SkyAutoMusic-v1.0.0-Lite-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.0/SkyAutoMusic-v1.0.0-Lite-Setup.exe",
+      "size": 22864987,
+      "sha256": "4e8eb82b5c5a8dd59d76a339d63fc050fdbf369c7b1a65e55dcd05427bdd1c96"
     },
     "full": {
-      "name": "SkyAutoMusic-v1.0.0-Full-win64.zip",
-      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.0/SkyAutoMusic-v1.0.0-Full-win64.zip",
-      "size": 100750463,
-      "sha256": "672bf57e658e95686389cd9a12d6ad4b83052005f80e8228c260ba36e7b4c702"
+      "name": "SkyAutoMusic-v1.0.0-Full-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.0/SkyAutoMusic-v1.0.0-Full-Setup.exe",
+      "size": 59906406,
+      "sha256": "9ba1491ec0dcc2105e3cdaaa3879417212249507af165ce055137cc643bd3898"
     }
   },
   "sheets": {
@@ -21,7 +21,8 @@
     "count": 17700,
     "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic-Sheets/releases/download/2026.07.27/SkyAutoMusic-Sheets-2026.07.27.zip",
     "size": 65631659,
-    "sha256": "b7ab7e4e34a1e6e9000002f88564ad596be3ea49c29968f0984495c96def31f3"
+    "sha256": "b7ab7e4e34a1e6e9000002f88564ad596be3ea49c29968f0984495c96def31f3",
+    "updates": []
   },
   "mirrors": [
     { "name": "国内镜像 · ghfast.top", "prefix": "https://ghfast.top/" },

@@ -2,9 +2,11 @@
 .venv-basic-pitch/
 __pycache__/
 *.pyc
-.release-build/
+.release-build*/
 .release-work/
 .release-artifacts*/
+.installer-staging*/
+.release-installers*/
 .nuitka-cache/
 .wrangler/
 /Sheet Music/Sky1984 - *.json

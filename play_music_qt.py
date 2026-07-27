@@ -1337,7 +1337,14 @@ class MainWindow(QMainWindow):
         count = int(result.get("count", 0))
         self.update_version_label.setText(f"当前：{version}")
         if result.get("updated"):
-            self.update_status_label.setText(f"更新完成：已安装 {count} 首曲谱。")
+            changed = int(result.get("changed", count))
+            removed = int(result.get("removed", 0))
+            if result.get("mode") == "incremental":
+                self.update_status_label.setText(
+                    f"增量更新完成：新增或修改 {changed} 首，移除 {removed} 首；曲库共 {count} 首。"
+                )
+            else:
+                self.update_status_label.setText(f"曲库安装完成：共 {count} 首曲谱。")
             self.refresh_files()
         else:
             self.update_status_label.setText(f"已经是最新曲库，共 {count} 首曲谱。")
