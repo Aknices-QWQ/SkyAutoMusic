@@ -179,6 +179,8 @@ footer { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; padding: 30p
 footer div { display: flex; flex-direction: column; }
 footer strong { color: var(--text); font-size: 14px; }
 footer p { margin: 0; }
+.footer-link { color: var(--soft); font-weight: 700; }
+.footer-link:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 
 @media (max-width: 920px) {
   .site-header { grid-template-columns: 1fr auto; }
