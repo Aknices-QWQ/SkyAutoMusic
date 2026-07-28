@@ -1,6 +1,7 @@
 const state = {
   manifest: null,
   edition: "lite",
+  theme: localStorage.getItem("skyautomusic-theme") || "carbon",
 };
 
 const elements = {
@@ -15,7 +16,25 @@ const elements = {
   version: document.querySelector("#release-version"),
   liteSize: document.querySelector("#lite-size"),
   fullSize: document.querySelector("#full-size"),
+  themes: [...document.querySelectorAll("[data-theme-value]")],
+  requestForm: document.querySelector("#request-form"),
+  requestTitle: document.querySelector("#request-title-input"),
+  requestSource: document.querySelector("#request-source"),
+  requestNotes: document.querySelector("#request-notes"),
+  authorQq: document.querySelector("#author-qq"),
+  copyQq: document.querySelector("#copy-qq"),
 };
+
+const availableThemes = new Set(["carbon", "warm", "editorial"]);
+
+function applyTheme(theme) {
+  state.theme = availableThemes.has(theme) ? theme : "carbon";
+  document.documentElement.dataset.theme = state.theme;
+  localStorage.setItem("skyautomusic-theme", state.theme);
+  elements.themes.forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.themeValue === state.theme));
+  });
+}
 
 function formatBytes(bytes) {
   return `${(Number(bytes) / 1024 / 1024).toFixed(1)} MB`;
@@ -55,6 +74,10 @@ elements.editions.forEach((input) => {
 
 elements.mirror.addEventListener("change", render);
 
+elements.themes.forEach((button) => {
+  button.addEventListener("click", () => applyTheme(button.dataset.themeValue));
+});
+
 elements.copy.addEventListener("click", async () => {
   if (!state.manifest) return;
   try {
@@ -65,6 +88,40 @@ elements.copy.addEventListener("click", async () => {
     elements.copy.textContent = "复制失败";
   }
 });
+
+elements.copyQq.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(elements.authorQq.textContent.trim());
+    elements.copyQq.textContent = "QQ 已复制";
+    window.setTimeout(() => { elements.copyQq.textContent = "复制作者 QQ"; }, 1600);
+  } catch {
+    elements.copyQq.textContent = "请手动复制号码";
+  }
+});
+
+elements.requestForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const title = elements.requestTitle.value.trim();
+  if (!title) {
+    elements.requestTitle.focus();
+    return;
+  }
+  const source = elements.requestSource.value.trim() || "未提供";
+  const notes = elements.requestNotes.value.trim() || "无";
+  const params = new URLSearchParams({
+    title: `求谱：${title}`,
+    body: `### 歌曲名称\n${title}\n\n### 音源链接\n${source}\n\n### 补充说明\n${notes}\n\n---\n来自 sky.xxlab.dev 的扒谱请求`,
+  });
+  window.location.href = `https://github.com/Aknices-QWQ/SkyAutoMusic/issues/new?${params}`;
+});
+
+const requestParams = new URLSearchParams(window.location.search);
+if (requestParams.get("request") === "1") {
+  elements.requestTitle.value = requestParams.get("title") || "";
+  window.setTimeout(() => elements.requestTitle.focus(), 0);
+}
+
+applyTheme(state.theme);
 
 fetch("/downloads.json", { cache: "no-store" })
   .then((response) => {

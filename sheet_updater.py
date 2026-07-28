@@ -1,12 +1,14 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import urllib.request
 import zipfile
 from collections import deque
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlparse
 
 
 MANIFEST_URL = "https://sky.xxlab.dev/downloads.json"
@@ -82,6 +84,48 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _safe_filename(filename):
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(filename)).strip(" .")
+    if not name.lower().endswith(".json"):
+        name += ".json"
+    stem = Path(name).stem[:180].rstrip(" .") or "导入乐谱"
+    return stem + ".json"
+
+
+def _unique_filename(filename, used_names):
+    filename = _safe_filename(filename)
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    candidate = filename
+    number = 2
+    while candidate.casefold() in used_names:
+        candidate = f"{stem} ({number}){suffix}"
+        number += 1
+    used_names.add(candidate.casefold())
+    return candidate, candidate != filename
+
+
+def _decode_sheet(payload):
+    last_error = None
+    for encoding in ("utf-8", "utf-8-sig", "gbk", "utf-16", "utf-16-le", "utf-16-be"):
+        try:
+            data = json.loads(payload.decode(encoding))
+            break
+        except Exception as exc:
+            last_error = exc
+    else:
+        raise RuntimeError(f"JSON 解析失败：{last_error}")
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        meta = data[0]
+    elif isinstance(data, dict):
+        meta = data
+    else:
+        raise RuntimeError("乐谱格式不正确")
+    if not isinstance(meta.get("songNotes"), list):
+        raise RuntimeError("乐谱缺少 songNotes")
+    return data
+
+
 def _safe_sheet_members(archive):
     members = []
     seen_names = set()
@@ -93,11 +137,8 @@ def _safe_sheet_members(archive):
             raise RuntimeError("曲库压缩包包含不安全路径")
         if path.suffix.lower() != ".json":
             continue
-        filename = path.name
-        if filename in seen_names:
-            raise RuntimeError(f"曲库压缩包存在重名文件：{filename}")
-        seen_names.add(filename)
-        members.append((member, filename))
+        filename, renamed = _unique_filename(path.name, seen_names)
+        members.append((member, filename, renamed))
     if not members:
         raise RuntimeError("曲库压缩包中没有 JSON 乐谱")
     return members
@@ -134,15 +175,42 @@ def _find_incremental_path(current_version, target_version, updates):
     return None
 
 
-def _install_archive(archive_path, sheet_dir, removals=None):
+def _install_archive(
+    archive_path,
+    sheet_dir,
+    removals=None,
+    preserve_existing=False,
+    validate_members=False,
+):
     installed = 0
+    renamed = 0
+    skipped = 0
+    existing_names = {path.name.casefold() for path in sheet_dir.glob("*.json")}
     with zipfile.ZipFile(archive_path) as archive:
         members = _safe_sheet_members(archive)
-        for member, filename in members:
-            target = sheet_dir / filename
+        for member, filename, archive_renamed in members:
+            with archive.open(member) as source:
+                payload = source.read()
+            if validate_members:
+                try:
+                    _decode_sheet(payload)
+                except Exception:
+                    skipped += 1
+                    continue
+            if preserve_existing:
+                exact_target = sheet_dir / filename
+                if exact_target.exists() and exact_target.read_bytes() == payload:
+                    skipped += 1
+                    continue
+                target_name, target_renamed = _unique_filename(filename, existing_names)
+            else:
+                target_name = filename
+                target_renamed = archive_renamed
+                existing_names.add(target_name.casefold())
+            renamed += int(archive_renamed or target_renamed)
+            target = sheet_dir / target_name
             temporary = target.with_suffix(target.suffix + ".part")
-            with archive.open(member) as source, temporary.open("wb") as output:
-                shutil.copyfileobj(source, output)
+            temporary.write_bytes(payload)
             os.replace(temporary, target)
             installed += 1
 
@@ -152,7 +220,99 @@ def _install_archive(archive_path, sheet_dir, removals=None):
         if target.exists():
             target.unlink()
             removed += 1
-    return installed, removed
+    return installed, removed, renamed, skipped
+
+
+def import_sheet_files(app_dir, paths):
+    sheet_dir = Path(app_dir) / "Sheet Music"
+    sheet_dir.mkdir(parents=True, exist_ok=True)
+    used_names = {path.name.casefold() for path in sheet_dir.glob("*.json")}
+    installed = 0
+    renamed = 0
+    skipped = 0
+    errors = []
+    for value in paths:
+        source_path = Path(value)
+        if not source_path.is_file() or source_path.suffix.lower() not in (".json", ".zip"):
+            skipped += 1
+            continue
+        try:
+            if source_path.suffix.lower() == ".zip":
+                archive_installed, _, archive_renamed, archive_skipped = _install_archive(
+                source_path,
+                sheet_dir,
+                preserve_existing=True,
+                validate_members=True,
+                )
+                installed += archive_installed
+                renamed += archive_renamed
+                skipped += archive_skipped
+                used_names = {path.name.casefold() for path in sheet_dir.glob("*.json")}
+                continue
+            payload = source_path.read_bytes()
+            _decode_sheet(payload)
+            safe_name = _safe_filename(source_path.name)
+            exact_target = sheet_dir / safe_name
+            if exact_target.exists() and exact_target.read_bytes() == payload:
+                skipped += 1
+                continue
+            target_name, was_renamed = _unique_filename(safe_name, used_names)
+            target = sheet_dir / target_name
+            temporary = target.with_suffix(target.suffix + ".part")
+            temporary.write_bytes(payload)
+            os.replace(temporary, target)
+            installed += 1
+            renamed += int(was_renamed)
+        except Exception as exc:
+            skipped += 1
+            errors.append(f"{source_path.name}: {exc}")
+    return {
+        "updated": installed > 0,
+        "version": read_local_state(app_dir).get("version", "本地曲库"),
+        "count": len(list(sheet_dir.glob("*.json"))),
+        "changed": installed,
+        "renamed": renamed,
+        "skipped": skipped,
+        "errors": errors,
+        "mode": "manual",
+    }
+
+
+def install_external_source(app_dir, url, progress_callback=None):
+    parsed = urlparse(str(url).strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise RuntimeError("请输入有效的 HTTP 或 HTTPS 下载地址")
+    source_name = _safe_filename(unquote(Path(parsed.path).name or "下载乐谱.json"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="skyautomusic-source-"))
+    try:
+        download_path = temp_dir / source_name
+        _download(url, download_path, progress_callback)
+        sheet_dir = Path(app_dir) / "Sheet Music"
+        sheet_dir.mkdir(parents=True, exist_ok=True)
+        if zipfile.is_zipfile(download_path):
+            installed, removed, renamed, skipped = _install_archive(
+                download_path,
+                sheet_dir,
+                preserve_existing=True,
+                validate_members=True,
+            )
+            return {
+                "updated": installed > 0,
+                "version": read_local_state(app_dir).get("version", "本地曲库"),
+                "count": len(list(sheet_dir.glob("*.json"))),
+                "changed": installed,
+                "removed": removed,
+                "renamed": renamed,
+                "skipped": skipped,
+                "mode": "external",
+                "source": url,
+            }
+        result = import_sheet_files(app_dir, [download_path])
+        result["mode"] = "external"
+        result["source"] = url
+        return result
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def install_sheet_update(app_dir, mirror_prefix="", progress_callback=None):
@@ -189,6 +349,8 @@ def install_sheet_update(app_dir, mirror_prefix="", progress_callback=None):
         sheet_dir.mkdir(parents=True, exist_ok=True)
         installed = 0
         removed = 0
+        renamed = 0
+        skipped = 0
         actual_hash = ""
         for index, package in enumerate(packages):
             archive_path = temp_dir / f"update-{index}.zip"
@@ -204,13 +366,15 @@ def install_sheet_update(app_dir, mirror_prefix="", progress_callback=None):
             actual_hash = _sha256(archive_path)
             if actual_hash.lower() != str(package["sha256"]).lower():
                 raise RuntimeError("曲库校验失败，请切换镜像后重试")
-            changed, deleted = _install_archive(
+            changed, deleted, renamed_count, skipped_count = _install_archive(
                 archive_path,
                 sheet_dir,
                 package.get("remove", []),
             )
             installed += changed
             removed += deleted
+            renamed += renamed_count
+            skipped += skipped_count
 
         state = {
             "version": sheets["version"],
@@ -228,6 +392,8 @@ def install_sheet_update(app_dir, mirror_prefix="", progress_callback=None):
             "count": int(sheets["count"]),
             "changed": installed,
             "removed": removed,
+            "renamed": renamed,
+            "skipped": skipped,
             "mode": update_mode,
         }
     finally:

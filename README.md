@@ -10,7 +10,7 @@ SkyAutoMusic 是面向 Windows 的《Sky 光·遇》自动演奏工具，提供�
 - **Full 完整版**：附带全部曲目，解压后即可离线使用。
 - 国内网络可以在网站或应用内选择预设 GitHub 镜像线路。
 
-下载安装器后按提示完成安装即可。默认安装到当前用户目录，程序和曲库更新都使用普通用户权限，不需要管理员权限。
+下载安装器后按提示完成安装即可。默认安装到当前用户目录，程序和曲库更新使用普通用户权限；若游戏无法接收按键，可在应用设置中开启管理员模式。
 
 ## 功能
 
@@ -24,6 +24,9 @@ SkyAutoMusic 是面向 Windows 的《Sky 光·遇》自动演奏工具，提供�
 - `Esc` 随时停止并释放全部按键
 - 从 GitHub Release 在线更新曲库，支持 SHA-256 校验和国内镜像
 - 已安装曲库后只下载版本间增量包，不重复下载完整曲库
+- 支持从其他 HTTP/HTTPS 直链下载 JSON 或 ZIP 曲库
+- 支持选择文件，或把 JSON / ZIP 直接拖入应用导入
+- 曲库存在同名文件时自动追加序号保留，不再中断导入
 
 ## 从源码运行
 
@@ -40,7 +43,7 @@ python play_music_qt.py
 
 ```powershell
 python -m pip install nuitka ordered-set zstandard
-python -m nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable --include-package=keyboard play_music_qt.py
+python -m nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable --include-package=keyboard --include-data-dir=assets=assets play_music_qt.py
 ```
 
 准备 Lite 或 Full 文件目录后，可使用 `installer.iss` 生成安装器。默认安装到当前用户的 LocalAppData，因此应用内曲库更新不需要管理员权限。
