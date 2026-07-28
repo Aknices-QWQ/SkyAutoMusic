@@ -17,8 +17,8 @@ from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlencode
 
-from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QCloseEvent, QDesktopServices, QIcon, QPainter, QPixmap, QShortcut, QKeySequence
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QCursor, QDesktopServices, QIcon, QPainter, QPixmap, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -61,7 +61,7 @@ from sheet_updater import (
 )
 
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 if "__compiled__" in globals() or getattr(sys, "frozen", False):
     APP_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2149,27 +2149,37 @@ class MainWindow(QMainWindow):
             self.library_layout.setContentsMargins(12, 17 + library_extra, 12, 12)
         super().resizeEvent(event)
 
+    def resize_hit_test(self, global_position, border=7):
+        """Return a Windows resize hit code from a Qt logical screen point."""
+        local = self.mapFromGlobal(global_position)
+        if not self.rect().contains(local):
+            return None
+        left = local.x() < border
+        right = local.x() >= self.width() - border
+        top = local.y() < border
+        bottom = local.y() >= self.height() - border
+        hit = {
+            (True, False, True, False): 13,   # HTTOPLEFT
+            (False, True, True, False): 14,   # HTTOPRIGHT
+            (True, False, False, True): 16,   # HTBOTTOMLEFT
+            (False, True, False, True): 17,   # HTBOTTOMRIGHT
+        }.get((left, right, top, bottom))
+        if hit is not None:
+            return hit
+        return 10 if left else 11 if right else 12 if top else 15 if bottom else None
+
     def nativeEvent(self, event_type, message):
         """Restore edge resizing for the frameless Windows window."""
         if os.name == "nt" and not self.isMaximized():
             try:
                 msg = wintypes.MSG.from_address(int(message))
                 if msg.message == 0x0084:  # WM_NCHITTEST
-                    cursor = QPoint(msg.pt.x, msg.pt.y)
-                    local = self.mapFromGlobal(cursor)
-                    border = 7
-                    left = local.x() < border
-                    right = local.x() >= self.width() - border
-                    top = local.y() < border
-                    bottom = local.y() >= self.height() - border
-                    hit = {
-                        (True, False, True, False): 13,   # HTTOPLEFT
-                        (False, True, True, False): 14,   # HTTOPRIGHT
-                        (True, False, False, True): 16,   # HTBOTTOMLEFT
-                        (False, True, False, True): 17,   # HTBOTTOMRIGHT
-                    }.get((left, right, top, bottom))
-                    if hit is None:
-                        hit = 10 if left else 11 if right else 12 if top else 15 if bottom else None
+                    # WM_NCHITTEST supplies physical screen pixels, while
+                    # mapFromGlobal expects Qt logical coordinates. Using the
+                    # native point directly makes most of the lower/right side
+                    # look like a resize border at 125–200% Windows scaling.
+                    cursor = QCursor.pos()
+                    hit = self.resize_hit_test(cursor)
                     if hit is not None:
                         return True, hit
             except Exception:
