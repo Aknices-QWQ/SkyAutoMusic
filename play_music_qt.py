@@ -746,9 +746,16 @@ class PiastudySearchDialog(QDialog):
         layout.addLayout(search_row)
 
         self.hands_combo = QComboBox()
+        self.hands_combo.addItem("纯旋律（推荐）", True)
         self.hands_combo.addItem("双手版", False)
-        self.hands_combo.addItem("纯旋律", True)
         layout.addWidget(self.hands_combo)
+
+        conversion_hint = QLabel(
+            "提示：转换结果可能与原曲存在差异；如果听感不一致，请更换同曲的其他版本。"
+        )
+        conversion_hint.setObjectName("MutedText")
+        conversion_hint.setWordWrap(True)
+        layout.addWidget(conversion_hint)
 
         self.results_list = QListWidget()
         self.results_list.itemDoubleClicked.connect(lambda _: self.convert_selected())
@@ -763,9 +770,15 @@ class PiastudySearchDialog(QDialog):
         self.convert_btn = QPushButton("转换到曲库")
         self.convert_btn.clicked.connect(self.convert_selected)
         self.convert_btn.setEnabled(False)
+        self.request_btn = QPushButton("提交扒谱请求")
+        self.request_btn.setObjectName("CompactButton")
+        self.request_btn.setToolTip("结果较少时，可提交给项目维护者处理")
+        self.request_btn.clicked.connect(self.request_sheet)
+        self.request_btn.hide()
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.reject)
         buttons.addStretch()
+        buttons.addWidget(self.request_btn)
         buttons.addWidget(self.convert_btn)
         buttons.addWidget(close_btn)
         layout.addLayout(buttons)
@@ -800,6 +813,7 @@ class PiastudySearchDialog(QDialog):
             return
         self.results = results
         self.results_list.clear()
+        self.request_btn.setVisible(len(results) < 10)
         for item in results:
             label = item["title"]
             meta = " · ".join(x for x in (item["keynote"], item["difficulty"]) if x)
@@ -810,11 +824,19 @@ class PiastudySearchDialog(QDialog):
             list_item.setData(Qt.UserRole, item)
             self.results_list.addItem(list_item)
         if results:
-            self.status_label.setText(f"找到 {len(results)} 个结果，双击可直接转换。")
+            message = f"找到 {len(results)} 个结果，双击可直接转换。"
+            if len(results) < 10:
+                message += " 结果较少，可提交扒谱请求。"
+            self.status_label.setText(message)
             self.results_list.setCurrentRow(0)
             self.convert_btn.setEnabled(True)
         else:
-            self.status_label.setText("没有找到，换个关键词试试。")
+            self.status_label.setText("没有找到，建议提交扒谱请求，或换个关键词试试。")
+
+    def request_sheet(self):
+        query = self.search_box.text().strip()
+        if query and self.parent() and hasattr(self.parent(), "open_sheet_request"):
+            self.parent().open_sheet_request(query)
 
     def convert_selected(self):
         if self._thread and self._thread.is_alive():
