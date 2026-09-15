@@ -1,0 +1,15 @@
+.python311/
+.venv-basic-pitch/
+__pycache__/
+*.pyc
+.release-build*/
+.release-work/
+.release-artifacts*/
+.installer-staging*/
+.release-installers*/
+.nuitka-cache/
+.wrangler/
+/Sheet Music/Sky1984 - *.json
+/sources/Sky1984-Sheets-Collection-*.zip
+/sources/Sky1984-Sheets-Collection-*.zip.part
+/sources/sky1984-sync-manifest.json
