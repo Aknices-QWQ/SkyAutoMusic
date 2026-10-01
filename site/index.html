@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="SkyAutoMusic — 面向 Windows 的 Sky 光·遇自动演奏工具，支持悬浮控制、进度跳转、原曲 BPM 变速和在线曲库。">
+  <meta name="description" content="SkyAutoMusic — Sky 光·遇开源音乐工具。下载最新正式版，了解制谱、内置音色、悬浮琴谱、MIDI 接入、歌曲段落与进度续播。">
   <meta name="theme-color" content="#0a0b0c">
   <title>SkyAutoMusic · 让每一次演奏更从容</title>
-  <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20261001">
+  <script src="/app.js?v=20261001" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -33,12 +33,13 @@
       <div class="hero-copy">
         <p class="eyebrow">Windows · 开源 · 默认普通权限</p>
         <h1 id="hero-title">把注意力留给音乐。</h1>
-        <p class="hero-lead">搜索曲库、试听键位、拖动进度。SkyAutoMusic 用克制的主窗口和小巧悬浮窗，让你在《Sky 光·遇》中轻松完成整场演奏。</p>
+        <p class="hero-lead">从找谱、制谱到游戏里演奏。SkyAutoMusic 将曲库、乐器试听、MIDI 键盘和悬浮琴谱放在顺手的位置，让你在《Sky 光·遇》中专心弹好每一段。</p>
         <div class="hero-actions">
           <a class="button button-primary" href="#download">选择版本下载</a>
           <a class="button button-secondary" href="#request">提交扒谱请求</a>
           <a class="button button-secondary" href="https://github.com/Aknices-QWQ/SkyAutoMusic" target="_blank" rel="noreferrer">打开 GitHub ↗</a>
         </div>
+        <p class="version-summary"><a href="#download">正式版 <span id="hero-release-version">v1.0.8</span></a><span>最新源码 <span id="hero-source-version">v1.0.13</span></span></p>
         <dl class="hero-stats">
           <div><dt id="sheet-count">17,700</dt><dd>首可用曲谱</dd></div>
           <div><dt>1.00x</dt><dd>忠于原曲 BPM</dd></div>
@@ -46,8 +47,8 @@
         </dl>
       </div>
 
-      <div class="app-preview" aria-label="SkyAutoMusic 界面预览">
-        <div class="preview-titlebar"><strong>SkyAutoMusic</strong><span>F3 悬浮窗　ESC 停止</span></div>
+      <div class="app-preview" aria-label="SkyAutoMusic 最新源码界面示意">
+        <div class="preview-titlebar"><strong>SkyAutoMusic · 界面示意</strong><span>F3 琴谱　ESC 停止</span></div>
         <div class="preview-body">
           <aside>
             <small>曲库</small>
@@ -62,49 +63,59 @@
             <small>当前曲目</small>
             <h2>Call of Silence</h2>
             <p>制谱 · Aknices&amp;&amp;BA4KQS</p>
+            <div class="preview-section"><span>A 段</span><b>B 段 · 循环</b><span>A 段重复</span></div>
             <div class="preview-progress"><span></span></div>
             <div class="preview-meta"><span>1:15 / 2:16</span><strong>1.00x</strong></div>
-            <div class="preview-controls"><span>预览</span><b>开始演奏</b><span>停止</span></div>
+            <div class="preview-controls"><span>预览</span><b>立即播放</b><span>停止</span></div>
           </div>
         </div>
         <div class="overlay-preview">
           <div><strong>Call of Silence</strong><small>55%</small></div>
           <div class="overlay-line"><span></span></div>
-          <p>预览　　开始　　停止　　主窗</p>
+          <p>预览　　立即　　停止　　主窗</p>
         </div>
       </div>
     </section>
 
     <section class="section features" id="features" aria-labelledby="features-title">
       <div class="section-heading">
-        <p>核心功能</p>
-        <h2 id="features-title">从选曲到演奏，只保留必要步骤</h2>
+        <p>最新源码 · <span id="feature-source-version">v1.0.13</span></p>
+        <h2 id="features-title">找谱、制谱、练习，各有入口</h2>
+        <span id="feature-availability">以下功能已合并到最新源码，正式安装包以下载区的版本为准。</span>
       </div>
       <ol class="feature-list">
-        <li><b>01</b><div><h3>快速找到曲目</h3><p>主窗口和悬浮窗都支持输入歌名；没有结果时可直接向维护者提交扒谱请求。</p></div></li>
-        <li><b>02</b><div><h3>按原曲 BPM 变速</h3><p>1.00x 始终代表原速，其余倍率以乐谱原始速度为基准加速或减速。</p></div></li>
-        <li><b>03</b><div><h3>紧凑悬浮控制</h3><p>按 F3 随时呼出；切歌、预览、开始、停止和进度跳转都在一个小窗口内。</p></div></li>
-        <li><b>04</b><div><h3>增量曲库更新</h3><p>只下载发生变化的曲谱，国内网络可选择预设 GitHub 镜像线路。</p></div></li>
+        <li><b>01</b><div><h3>找谱与实时识曲</h3><p>搜索歌名、在线转换、导入 MIDI / JSON。实时识曲可从电脑声音中匹配本地曲库，清楚的单音旋律效果更好。</p></div></li>
+        <li><b>02</b><div><h3>光遇 15 键制谱</h3><p>用电脑键盘或 MIDI 键盘录入。分离录制可以逐个选音，再写入同一组和弦；支持保存与导出 JSON 曲谱。</p></div></li>
+        <li><b>03</b><div><h3>内置 22 种乐器音色</h3><p>按图标和名称选择乐器。本机试听支持演奏地点调性预设与手动修正，游戏音高仍由背景音乐决定。</p></div></li>
+        <li><b>04</b><div><h3>悬浮琴谱与 MIDI 接入</h3><p>在光遇里看 15 键琴谱，支持自动翻谱、鼠标穿透和 MIDI 跟谱。MIDI 键盘可接入选中的游戏窗口，切出游戏时释放按键。</p></div></li>
+        <li><b>05</b><div><h3>从保存的位置继续弹</h3><p>立即播放跳过倒计时。停止或按 Esc 会保留精确音符进度，切歌、重启后也能继续；1.00x 按原曲速度播放。</p></div></li>
+        <li><b>06</b><div><h3>只练这一段</h3><p>从 MIDI 音符估计 A/B 段、重复段与高潮候选，单独试听或循环演奏。可手动改名和调整范围，自动结果不等于确认副歌。</p></div></li>
+        <li><b>07</b><div><h3>MIDI 跟弹与入门练习</h3><p>练习页独立选曲，提供目标音符、唱名、分段课程与本地练习建议。制谱、练习、游戏输入可按用途切换。</p></div></li>
+        <li><b>08</b><div><h3>曲库与手机同步</h3><p>支持收藏、模糊搜索和增量曲库更新。可在同一局域网同步曲谱到手机，国内下载可选择 GitHub 镜像线路。</p></div></li>
       </ol>
     </section>
 
     <section class="section download-section" id="download" aria-labelledby="download-title">
       <div class="section-heading">
-        <p>下载</p>
-        <h2 id="download-title">选择适合你的版本</h2>
+        <p>最新正式版</p>
+        <h2 id="download-title">下载已发布的安装包</h2>
         <span>Windows 64 位安装器。默认普通权限；若游戏无法接收按键，可在设置中开启管理员模式。</span>
+      </div>
+      <div class="source-notice" id="source-notice">
+        <div><strong>想用最新功能？</strong><p id="source-status">v1.0.13 已合并到源码，尚未发布正式安装包；下方下载的是 v1.0.8。</p></div>
+        <a class="button button-secondary" id="build-link" href="https://github.com/Aknices-QWQ/SkyAutoMusic/actions/workflows/windows-build.yml" target="_blank" rel="noreferrer">查看最新构建 ↗</a>
       </div>
       <div class="download-shell">
         <div class="edition-list" role="radiogroup" aria-label="选择下载版本">
           <label class="edition-card is-selected">
             <input type="radio" name="edition" value="lite" checked>
             <span class="edition-main"><strong>Lite 精简版</strong><small>内置定制曲，可在应用内更新完整曲库</small></span>
-            <span class="edition-size" id="lite-size">21.8 MB</span>
+            <span class="edition-size" id="lite-size">22.6 MB</span>
           </label>
           <label class="edition-card">
             <input type="radio" name="edition" value="full">
             <span class="edition-main"><strong>Full 完整版</strong><small>附带全部曲谱，安装后即可离线使用</small></span>
-            <span class="edition-size" id="full-size">57.1 MB</span>
+            <span class="edition-size" id="full-size">58.0 MB</span>
           </label>
         </div>
         <div class="download-options">
@@ -114,12 +125,13 @@
             <option value="https://gh-proxy.com/">备用镜像 · gh-proxy.com</option>
             <option value="">GitHub 直连</option>
           </select>
-          <a class="button button-primary download-button" id="download-button" href="#">下载 Lite 精简版</a>
-          <p class="download-meta"><span id="release-version">v1.0.3</span><span>Windows 64 位</span><span>默认普通权限</span></p>
+          <a class="button button-primary download-button" id="download-button" href="https://ghfast.top/https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.8/SkyAutoMusic-v1.0.8-Lite-Setup.exe">下载 Lite 精简版</a>
+          <p class="download-meta"><span id="release-version">v1.0.8</span><span>Windows 64 位</span><span>默认普通权限</span></p>
           <div class="checksum-row"><code id="checksum">SHA-256 加载中…</code><button type="button" id="copy-checksum">复制</button></div>
           <p class="download-note" id="download-note">国内线路会通过所选镜像转发 GitHub Release 下载。</p>
         </div>
       </div>
+      <p class="release-links"><a id="release-notes-link" href="https://github.com/Aknices-QWQ/SkyAutoMusic/releases/tag/v1.0.8" target="_blank" rel="noreferrer">查看正式版更新说明 ↗</a><a href="https://github.com/Aknices-QWQ/SkyAutoMusic/blob/main/docs/song-sections.md" target="_blank" rel="noreferrer">歌曲段落与续播用法 ↗</a></p>
     </section>
 
     <section class="section request-section" id="request" aria-labelledby="request-title">
@@ -139,12 +151,12 @@
       </form>
       <div class="qq-fallback" aria-label="没有 GitHub 时的联系方式">
         <div>
-          <strong>没有 GitHub？</strong>
-          <span>可以添加作者 QQ，发送歌名、音源链接和版本要求。作者会不定期处理扒谱请求。</span>
+          <strong>交流与求谱</strong>
+          <span>加入 QQ 群 675830191，交流使用、反馈问题或发送歌名、音源链接和版本要求。</span>
         </div>
         <div class="qq-contact">
-          <code id="author-qq">2912173424</code>
-          <button class="button button-secondary" type="button" id="copy-qq">复制作者 QQ</button>
+          <code id="author-qq">675830191</code>
+          <button class="button button-secondary" type="button" id="copy-qq">复制 QQ 群号</button>
         </div>
       </div>
     </section>

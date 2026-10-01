@@ -14,6 +14,14 @@ const elements = {
   note: document.querySelector("#download-note"),
   count: document.querySelector("#sheet-count"),
   version: document.querySelector("#release-version"),
+  heroRelease: document.querySelector("#hero-release-version"),
+  heroSource: document.querySelector("#hero-source-version"),
+  featureSource: document.querySelector("#feature-source-version"),
+  featureAvailability: document.querySelector("#feature-availability"),
+  sourceNotice: document.querySelector("#source-notice"),
+  sourceStatus: document.querySelector("#source-status"),
+  buildLink: document.querySelector("#build-link"),
+  releaseNotes: document.querySelector("#release-notes-link"),
   liteSize: document.querySelector("#lite-size"),
   fullSize: document.querySelector("#full-size"),
   themes: [...document.querySelectorAll("[data-theme-value]")],
@@ -46,6 +54,49 @@ function mirroredUrl(url, prefix) {
     : url;
 }
 
+function compareVersions(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1;
+  }
+  return 0;
+}
+
+function appFromRelease(release) {
+  if (release.draft || release.prerelease || !/^v\d+\.\d+\.\d+$/.test(release.tag_name)) return null;
+  const version = release.tag_name.slice(1);
+  const repository = "https://github.com/Aknices-QWQ/SkyAutoMusic";
+  const app = { version, repository, release_url: `${repository}/releases/tag/${release.tag_name}` };
+  for (const edition of ["lite", "full"]) {
+    const name = `SkyAutoMusic-${release.tag_name}-${edition === "lite" ? "Lite" : "Full"}-Setup.exe`;
+    const expectedUrl = `${repository}/releases/download/${release.tag_name}/${name}`;
+    const asset = (release.assets || []).find((entry) => entry.name === name && entry.state === "uploaded");
+    if (!asset || asset.browser_download_url !== expectedUrl ||
+        !Number.isSafeInteger(asset.size) || asset.size <= 0 ||
+        !/^sha256:[a-f0-9]{64}$/i.test(asset.digest || "")) return null;
+    app[edition] = { name, asset_url: expectedUrl, size: asset.size, sha256: asset.digest.slice(7).toLowerCase() };
+  }
+  return app;
+}
+
+async function refreshLatestRelease() {
+  // The deployed manifest remains available if GitHub is blocked or rate limited.
+  try {
+    const response = await fetch("https://api.github.com/repos/Aknices-QWQ/SkyAutoMusic/releases/latest", {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return;
+    const app = appFromRelease(await response.json());
+    if (!app || compareVersions(app.version, state.manifest.app.version) < 0) return;
+    state.manifest.app = { ...state.manifest.app, ...app };
+    render();
+  } catch {
+    // Keep the validated, published download from downloads.json.
+  }
+}
+
 function render() {
   if (!state.manifest) return;
   const asset = state.manifest.app[state.edition];
@@ -54,6 +105,20 @@ function render() {
   elements.download.href = mirroredUrl(asset.asset_url, elements.mirror.value);
   elements.checksum.textContent = asset.sha256;
   elements.version.textContent = `v${state.manifest.app.version}`;
+  elements.heroRelease.textContent = elements.version.textContent;
+  elements.releaseNotes.href = state.manifest.app.release_url || `${state.manifest.app.repository}/releases/latest`;
+  const source = state.manifest.source;
+  if (source) {
+    elements.heroSource.textContent = `v${source.version}`;
+    elements.featureSource.textContent = `v${source.version}`;
+    const unreleased = compareVersions(source.version, state.manifest.app.version) > 0;
+    elements.sourceNotice.hidden = !unreleased;
+    elements.sourceStatus.textContent = `v${source.version} 已合并到源码，尚未发布正式安装包；下方下载的是 v${state.manifest.app.version}。最新构建完成后，可在 Actions 的 Artifacts 下载（需登录 GitHub）。`;
+    elements.buildLink.href = source.build_url;
+    elements.featureAvailability.textContent = unreleased
+      ? "以下功能已合并到最新源码，正式安装包以下载区的版本为准。"
+      : "以下功能已包含在当前正式版，可在下载区获取安装包。";
+  }
   elements.count.textContent = Number(state.manifest.sheets.count).toLocaleString("zh-CN");
   elements.liteSize.textContent = formatBytes(state.manifest.app.lite.size);
   elements.fullSize.textContent = formatBytes(state.manifest.app.full.size);
@@ -93,7 +158,7 @@ elements.copyQq.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(elements.authorQq.textContent.trim());
     elements.copyQq.textContent = "QQ 已复制";
-    window.setTimeout(() => { elements.copyQq.textContent = "复制作者 QQ"; }, 1600);
+    window.setTimeout(() => { elements.copyQq.textContent = "复制 QQ 群号"; }, 1600);
   } catch {
     elements.copyQq.textContent = "请手动复制号码";
   }
@@ -131,6 +196,7 @@ fetch("/downloads.json", { cache: "no-store" })
   .then((manifest) => {
     state.manifest = manifest;
     render();
+    void refreshLatestRelease();
   })
   .catch(() => {
     elements.download.removeAttribute("href");
