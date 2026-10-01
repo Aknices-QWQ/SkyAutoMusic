@@ -55,6 +55,60 @@ class FeaturePagesTests(unittest.TestCase):
         window.nav_play.click()
         self.assertIs(window.pages.currentWidget(), window.play_page)
 
+    def test_game_tools_have_one_page_and_all_shortcuts_open_midi_tab(self):
+        window = self.window
+        window.show()
+        window.nav_game.click()
+        self.assertIs(window.pages.currentWidget(), window.game_page)
+        self.assertEqual([window.game_tabs.tabText(i) for i in range(3)],
+                         ["悬浮琴谱", "MIDI 接入", "手机同步"])
+        self.assertTrue(window.game_page.isAncestorOf(window.midi_game))
+        self.assertTrue(window.game_page.isAncestorOf(window.mobile_toggle_button))
+        self.assertFalse(window.help_page.isAncestorOf(window.midi_game))
+        for button in (window.game_midi_button, window.overlay.midi_button):
+            window.pages.setCurrentWidget(window.play_page)
+            button.click()
+            self.assertIs(window.pages.currentWidget(), window.game_page)
+            self.assertEqual(window.game_tabs.currentIndex(), 1)
+            self.assertTrue(window.nav_game.isChecked())
+            self.assertFalse(window.nav_update.isChecked())
+
+    def test_score_entry_opens_score_and_select_song_returns_to_playback(self):
+        window = self.window
+        window.nav_game.click()
+        window.game_open_score.click()
+        self.assertTrue(window.overlay.isVisible())
+        self.assertTrue(window.overlay.score_button.isChecked())
+        window.game_open_score.click()
+        self.assertTrue(window.overlay.isVisible())
+        window.select_file("B.json")
+        self.assertEqual(window.game_song_label.text(), "B")
+        window.game_choose_song.click()
+        self.assertTrue(window.nav_play.isChecked())
+        self.assertFalse(window.nav_game.isChecked())
+        window.overlay_btn.click()
+        self.assertFalse(window.overlay.isVisible())
+        window.overlay_btn.click()
+        self.assertTrue(window.overlay.isVisible())
+        window.clear_selected_song()
+        self.assertEqual(window.game_song_label.text(), "未选择曲谱")
+
+    def test_f7_in_game_page_starts_selected_game_mode(self):
+        window = self.window
+        window.show()
+        window.show_game_midi()
+        with patch.object(window.midi_game, "start") as midi, patch.object(window, "start_play") as play:
+            window.signals.start_requested.emit()
+            midi.assert_called_once()
+            play.assert_not_called()
+            window.game_tabs.setCurrentIndex(0)
+            window.signals.start_requested.emit()
+            self.assertTrue(window.overlay.score_timer.isActive())
+            play.assert_not_called()
+            window.game_tabs.setCurrentIndex(2)
+            window.signals.start_requested.emit()
+            play.assert_not_called()
+
     def configure_game_midi(self):
         panel = self.window.midi_game
         backend = Mock()

@@ -1568,29 +1568,31 @@ class MainWindow(QMainWindow):
         nav_group.setExclusive(True)
         self.nav_icon_specs = []
 
-        def add_nav(text, icon, checked=False):
+        def add_nav(text, icon, checked=False, hint=""):
             button = QToolButton()
             button.setObjectName("NavButton")
             button.setText(text)
+            button.setAccessibleName(text)
+            button.setToolTip(hint or text)
             button.setIcon(self.style().standardIcon(icon))
             button.setIconSize(QSize(20, 20))
             button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
             button.setCheckable(True)
             button.setChecked(checked)
-            button.setFixedHeight(68)
+            button.setFixedHeight(58)
             nav_group.addButton(button)
             self.nav_icon_specs.append((button, icon))
             nav_layout.addWidget(button)
             return button
 
-        self.nav_play = add_nav("播放", QStyle.SP_MediaPlay, True)
-        self.nav_transcribe = add_nav("扒曲", QStyle.SP_FileDialogListView)
-        self.nav_compose = add_nav("制谱", QStyle.SP_FileDialogDetailedView)
-        self.nav_practice = add_nav("练习", QStyle.SP_MediaVolume)
-        nav_layout.addSpacing(6)
-        self.nav_update = add_nav("设置", QStyle.SP_ComputerIcon)
-        self.nav_about = add_nav("关于", QStyle.SP_MessageBoxInformation)
+        self.nav_play = add_nav("播放", QStyle.SP_MediaPlay, True, "曲库、试听与自动演奏")
+        self.nav_compose = add_nav("制谱", QStyle.SP_FileDialogDetailedView, hint="键盘 / MIDI 制谱与分离录制")
+        self.nav_transcribe = add_nav("找谱", QStyle.SP_FileDialogListView, hint="在线搜索、本地导入、曲库更新与实时识曲")
+        self.nav_practice = add_nav("练习", QStyle.SP_MediaVolume, hint="曲谱跟弹、初学者课程与练习教练")
+        self.nav_game = add_nav("游戏", QStyle.SP_DesktopIcon, hint="悬浮琴谱、MIDI 接入光遇与手机同步")
         nav_layout.addStretch()
+        self.nav_update = add_nav("设置", QStyle.SP_ComputerIcon, hint="主题、音色管理与管理员模式")
+        self.nav_about = add_nav("关于", QStyle.SP_MessageBoxInformation, hint="软件更新、交流与项目资料")
         nav_status = QLabel("就绪")
         nav_status.setObjectName("NavStatus")
         nav_status.setAlignment(Qt.AlignCenter)
@@ -1611,9 +1613,13 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(play_page)
         self.pages.addWidget(help_page)
         self.pages.addWidget(about_page)
+        self.game_page = QWidget()
+        self.game_page.setObjectName("GamePage")
+        self.pages.addWidget(self.game_page)
         self.nav_play.clicked.connect(lambda: self.pages.setCurrentWidget(play_page))
         self.nav_update.clicked.connect(lambda: self.pages.setCurrentWidget(help_page))
         self.nav_about.clicked.connect(lambda: self.pages.setCurrentWidget(about_page))
+        self.nav_game.clicked.connect(self.show_game_page)
         self.transcribe_page = QWidget()
         self.transcribe_page.setObjectName("TranscribePage")
         self.pages.addWidget(self.transcribe_page)
@@ -1629,6 +1635,12 @@ class MainWindow(QMainWindow):
         self.midi_practice.score_selected.connect(self.select_practice_file)
         self.midi_practice.progress_saved.connect(self.save_config)
         self.nav_practice.clicked.connect(self.show_midi_practice)
+        self.page_navigation = {
+            play_page: self.nav_play, self.score_editor: self.nav_compose,
+            self.transcribe_page: self.nav_transcribe, self.midi_practice: self.nav_practice,
+            self.game_page: self.nav_game, help_page: self.nav_update, about_page: self.nav_about,
+        }
+        self.pages.currentChanged.connect(self.sync_navigation)
 
         page_layout = QVBoxLayout(play_page)
         page_layout.setContentsMargins(0, 0, 0, 0)
@@ -1670,7 +1682,7 @@ class MainWindow(QMainWindow):
         nf_hint = QLabel("曲库中没找到")
         nf_hint.setObjectName("MutedText")
         nf_layout.addWidget(nf_hint)
-        self.piastudy_search_btn = QPushButton("去扒曲")
+        self.piastudy_search_btn = QPushButton("去找谱")
         self.piastudy_search_btn.setObjectName("CompactButton")
         self.piastudy_search_btn.clicked.connect(lambda: self.open_piastudy_search(self.search.text().strip()))
         nf_layout.addWidget(self.piastudy_search_btn)
@@ -1895,21 +1907,14 @@ class MainWindow(QMainWindow):
         self.inspector_layout = inspector_layout
         inspector_layout.setContentsMargins(14, 18, 14, 13)
         inspector_layout.setSpacing(12)
-        inspector_title = QLabel("悬浮窗与快捷键")
+        inspector_title = QLabel("游戏工具与快捷键")
         inspector_title.setObjectName("InspectorTitle")
         inspector_layout.addWidget(inspector_title)
 
-        overlay_row = QHBoxLayout()
-        overlay_copy = QLabel("显示悬浮窗")
-        overlay_copy.setObjectName("InspectorLabel")
-        self.overlay_switch = QCheckBox()
-        self.overlay_switch.setObjectName("OverlaySwitch")
-        self.overlay_switch.setAccessibleName("显示悬浮窗")
-        self.overlay_switch.clicked.connect(self.toggle_overlay)
-        overlay_row.addWidget(overlay_copy)
-        overlay_row.addStretch()
-        overlay_row.addWidget(self.overlay_switch)
-        inspector_layout.addLayout(overlay_row)
+        self.game_midi_button = QPushButton("MIDI 接入光遇")
+        self.game_midi_button.setToolTip("打开游戏页的 MIDI 接入设置")
+        self.game_midi_button.clicked.connect(self.show_game_midi)
+        inspector_layout.addWidget(self.game_midi_button)
 
         inspector_divider = QFrame()
         inspector_divider.setFrameShape(QFrame.HLine)
@@ -1953,14 +1958,15 @@ class MainWindow(QMainWindow):
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setObjectName("DangerButton")
         self.preview_btn = QPushButton("预览")
-        self.overlay_btn = QPushButton("显示悬浮窗")
+        self.overlay_btn = QPushButton("悬浮琴谱")
+        self.overlay_btn.setToolTip("打开光遇 15 键琴谱，在游戏里看谱弹奏；F3 显示 / 隐藏")
         for button in (self.start_btn, self.stop_btn, self.preview_btn, self.overlay_btn):
             button.setMinimumHeight(52)
         self.stop_btn.setEnabled(False)
         self.start_btn.clicked.connect(self.start_play)
         self.stop_btn.clicked.connect(self.stop_play)
         self.preview_btn.clicked.connect(self.toggle_preview)
-        self.overlay_btn.clicked.connect(self.toggle_overlay)
+        self.overlay_btn.clicked.connect(self.toggle_score_overlay)
         transport_layout.addWidget(self.preview_btn, 2)
         transport_layout.addWidget(self.start_btn, 3)
         transport_layout.addWidget(self.stop_btn, 3)
@@ -2025,9 +2031,11 @@ class MainWindow(QMainWindow):
         admin_layout.addWidget(self.admin_mode_check)
         help_layout.addWidget(admin_card)
 
-        self.midi_game = MidiSkyPanel(self.send_game_key, self.config, help_page)
+        self.build_game_page()
+        self.midi_game = MidiSkyPanel(self.send_game_key, self.config, self.game_page)
         self.midi_game.starting.connect(self.stop_play)
-        help_layout.addWidget(self.midi_game)
+        self.game_midi_layout.addWidget(self.midi_game)
+        self.game_midi_layout.addStretch()
 
         sound_card = QFrame()
         sound_card.setObjectName("Card")
@@ -2109,7 +2117,8 @@ class MainWindow(QMainWindow):
         mobile_action_row.addWidget(self.mobile_status_label, 1)
         mobile_action_row.addWidget(self.mobile_toggle_button)
         mobile_layout.addLayout(mobile_action_row)
-        help_layout.addWidget(mobile_card)
+        self.game_mobile_layout.addWidget(mobile_card)
+        self.game_mobile_layout.addStretch()
 
         self.build_transcribe_page()
 
@@ -2202,11 +2211,119 @@ class MainWindow(QMainWindow):
         self.setup_sky_sound_controls()
         self.setup_sky_location_controls()
 
+    def build_game_page(self):
+        root = QVBoxLayout(self.game_page)
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(12)
+        title = QLabel("游戏")
+        title.setObjectName("BrandTitle")
+        root.addWidget(title)
+        self.game_tabs = QTabWidget()
+        self.game_tabs.setAccessibleName("游戏弹奏方式")
+        root.addWidget(self.game_tabs, 1)
+        for label, attribute in (
+            ("悬浮琴谱", "game_score_layout"),
+            ("MIDI 接入", "game_midi_layout"),
+            ("手机同步", "game_mobile_layout"),
+        ):
+            scroll = QScrollArea()
+            scroll.setObjectName("GameScroll")
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            content = QWidget()
+            content.setObjectName("GameContent")
+            layout = QVBoxLayout(content)
+            layout.setContentsMargins(18, 18, 18, 18)
+            layout.setSpacing(14)
+            setattr(self, attribute, layout)
+            scroll.setWidget(content)
+            self.game_tabs.addTab(scroll, label)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        heading = QLabel("在光遇里看谱弹奏")
+        heading.setObjectName("CardTitle")
+        layout.addWidget(heading)
+        self.game_song_label = QLabel("未选择曲谱")
+        self.game_song_label.setObjectName("SongTitle")
+        self.game_song_label.setWordWrap(True)
+        layout.addWidget(self.game_song_label)
+        self.game_score_details = QLabel("先在播放页选择一首曲谱。")
+        self.game_score_details.setObjectName("MutedText")
+        self.game_score_details.setWordWrap(True)
+        layout.addWidget(self.game_score_details)
+        actions = QHBoxLayout()
+        self.game_choose_song = QPushButton("选择曲谱")
+        self.game_choose_song.clicked.connect(lambda: self.pages.setCurrentWidget(self.play_page))
+        self.game_open_score = QPushButton("打开悬浮琴谱")
+        self.game_open_score.setObjectName("PrimaryButton")
+        self.game_open_score.clicked.connect(self.show_score_overlay)
+        self.game_hide_score = QPushButton("隐藏悬浮窗")
+        self.game_hide_score.clicked.connect(lambda: self.overlay.isVisible() and self.toggle_overlay())
+        for button in (self.game_choose_song, self.game_open_score, self.game_hide_score):
+            actions.addWidget(button)
+        actions.addStretch()
+        layout.addLayout(actions)
+        copy = QLabel("切回光遇后，按亮起的 15 键提示弹奏。悬浮窗可拖动，也可调整透明度。")
+        copy.setObjectName("MutedText")
+        copy.setWordWrap(True)
+        layout.addWidget(copy)
+        shortcuts = QLabel("F3 显示 / 隐藏　　F4 鼠标穿透\nF5 / F6 翻谱　　F7 开始翻谱　　F9 自动翻谱\nF8 / Esc 停止")
+        shortcuts.setObjectName("MutedText")
+        shortcuts.setWordWrap(True)
+        layout.addWidget(shortcuts)
+        window_hint = QLabel("游戏使用窗口化或无边框模式，悬浮窗才能覆盖游戏画面。")
+        window_hint.setObjectName("MutedText")
+        window_hint.setWordWrap(True)
+        layout.addWidget(window_hint)
+        self.game_score_layout.addWidget(card)
+        midi_link = QPushButton("用 MIDI 键盘在光遇弹奏 →")
+        midi_link.clicked.connect(self.show_game_midi)
+        self.game_score_layout.addWidget(midi_link, 0, Qt.AlignLeft)
+        self.game_score_layout.addStretch()
+
+    def sync_navigation(self):
+        button = self.page_navigation.get(self.pages.currentWidget())
+        if button:
+            button.setChecked(True)
+
+    def show_game_page(self):
+        self.pages.setCurrentWidget(self.game_page)
+
+    def show_score_overlay(self):
+        if not self.sorted_times:
+            self.pages.setCurrentWidget(self.play_page)
+            self.set_status("请先选择曲谱，再打开悬浮琴谱")
+            return
+        if not self.overlay.score_button.isChecked():
+            self.overlay.score_button.setChecked(True)
+            self.overlay.toggle_score()
+        if self.overlay.lock_button.isChecked():
+            self.overlay.set_input_locked(False)
+        if not self.overlay.isVisible():
+            self.toggle_overlay()
+
+    def toggle_score_overlay(self):
+        if self.overlay.isVisible() and self.overlay.score_button.isChecked():
+            self.toggle_overlay()
+        else:
+            self.show_score_overlay()
+
+    def update_game_score(self):
+        self.game_song_label.setText(self.name_label.text() if self.selected_file else "未选择曲谱")
+        self.game_score_details.setText(
+            f"{len(self.sorted_times):,} 组音符 · {self.bpm} BPM · 与播放页共用选曲"
+            if self.sorted_times else "先在播放页选择一首曲谱。")
+
     def build_transcribe_page(self):
         layout = QVBoxLayout(self.transcribe_page)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
-        title = QLabel("扒曲")
+        title = QLabel("找谱")
         title.setObjectName("BrandTitle")
         layout.addWidget(title)
         self.transcribe_tabs = QTabWidget()
@@ -2243,12 +2360,11 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentWidget(self.midi_practice)
 
     def show_game_midi(self):
-        self.pages.setCurrentWidget(self.help_page)
-        self.nav_update.setChecked(True)
+        self.show_game_page()
+        self.game_tabs.setCurrentIndex(1)
         self.showNormal()
         self.raise_()
         self.activateWindow()
-        QTimer.singleShot(0, lambda: self.help_scroll.ensureWidgetVisible(self.midi_game))
 
     def release_midi_ownership(self, owner):
         if owner != "game":
@@ -2490,6 +2606,15 @@ class MainWindow(QMainWindow):
     def start_from_shortcut(self):
         if self.pages.currentWidget() is self.midi_practice:
             self.midi_practice.start_practice()
+        elif self.pages.currentWidget() is self.game_page:
+            if self.game_tabs.currentIndex() == 1:
+                self.midi_game.start()
+            elif self.game_tabs.currentIndex() == 0:
+                self.show_score_overlay()
+                if self.overlay.isVisible() and not self.overlay.auto_score_button.isChecked():
+                    self.overlay.auto_score_button.click()
+            else:
+                self.set_status("请在手机端选择曲谱并开始演奏")
         else:
             self.start_play()
 
@@ -2902,7 +3027,7 @@ class MainWindow(QMainWindow):
             QMainWindow { background: #090C12; }
             QWidget { color: #F5F7FB; font-family: "Microsoft YaHei UI", "Microsoft YaHei"; font-size: 14px; }
             #AppShell { background: #090C12; border: 1px solid #2B3445; border-radius: 6px; }
-            #AppContent, #Pages, #PlayPage, #HelpPage, #HelpScroll, #HelpContent, #AboutPage, #AboutScroll, #AboutContent, #PracticePage, #PracticeScroll, #PracticeContent, #TranscribePage, #TranscribePanel, #ScoreEditorPage, #ScoreEditorBody, #ScoreEditorScroll { background: #090C12; border: 0; }
+            #AppContent, #Pages, #PlayPage, #HelpPage, #HelpScroll, #HelpContent, #AboutPage, #AboutScroll, #AboutContent, #PracticePage, #PracticeScroll, #PracticeContent, #TranscribePage, #TranscribePanel, #ScoreEditorPage, #ScoreEditorBody, #ScoreEditorScroll, #GamePage, #GameScroll, #GameContent { background: #090C12; border: 0; }
             #WindowTitleBar { background: #0C1118; border-bottom: 1px solid #2B3445; }
             #TitleBarBrand { color: #F5F7FB; font-size: 15px; font-weight: 700; }
             #WindowTitleBar QToolButton { background: transparent; border: 0; border-radius: 3px; }
@@ -3178,6 +3303,7 @@ class MainWindow(QMainWindow):
         for label in (self.author_label, self.transcribed_label, self.filename_label):
             label.setText("—")
         self.overlay.song_label.setText("请选择一首乐谱")
+        self.update_game_score()
         self.overlay.keys_label.setText("当前按键：—")
         self.set_progress(0, 0)
         self.on_speed_changed()
@@ -3229,6 +3355,7 @@ class MainWindow(QMainWindow):
         self.filename_label.setText(self.display_song_name(filename))
         self.song_summary_label.setText(f"{len(notes):,} 个音符")
         self.overlay.song_label.setText(self.name_label.text() or Path(filename).stem)
+        self.update_game_score()
         self.apply_speed_preset(filename)
         self.on_speed_changed()
         self.set_progress(0)
@@ -3849,7 +3976,7 @@ class MainWindow(QMainWindow):
     def toggle_overlay(self):
         if self.overlay.isVisible():
             self.overlay.hide()
-            self.overlay_btn.setText("显示悬浮窗")
+            self.overlay_btn.setText("悬浮琴谱")
             visible = False
         else:
             self.overlay.refresh()
