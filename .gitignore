@@ -1,4 +1,5 @@
 .python311/
+.build-env*/
 .venv-basic-pitch/
 __pycache__/
 *.pyc

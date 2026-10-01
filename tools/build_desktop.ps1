@@ -1,7 +1,8 @@
 param(
     [string]$ReleaseTag = '',
     [string]$InnoCompiler = '',
-    [string]$OutputDir = 'output/windows'
+    [string]$OutputDir = 'output/windows',
+    [string]$SheetArchive = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,7 +40,9 @@ try {
     & python @compileArgs 2>&1 | Tee-Object -FilePath (Join-Path $outputPath 'build.log')
     if ($LASTEXITCODE -ne 0) { throw 'Nuitka compilation failed' }
 
-    & python tools/prepare_desktop_release.py stage --output $outputPath --release-tag $ReleaseTag
+    $stageArgs = @('tools/prepare_desktop_release.py', 'stage', '--output', $outputPath, '--release-tag', $ReleaseTag)
+    if ($SheetArchive) { $stageArgs += @('--sheet-archive', (Resolve-Path -LiteralPath $SheetArchive).Path) }
+    & python @stageArgs
     if ($LASTEXITCODE -ne 0) { throw 'Installer staging failed' }
     $installerPath = Join-Path $outputPath 'installers'
     foreach ($edition in @('Lite', 'Full')) {

@@ -65,6 +65,33 @@ def included_sheet(path):
     )
 
 
+WINDOWS_RESERVED_NAMES = {
+    'con', 'prn', 'aux', 'nul',
+    *(f'com{number}' for number in range(1, 10)),
+    *(f'lpt{number}' for number in range(1, 10)),
+}
+
+
+def safe_windows_filename(name):
+    """Return a deterministic Windows-safe filename without dropping a sheet."""
+    # ZIP archives may contain names that are valid on Unix but cannot be
+    # created or opened by the Windows installer. Preserve the readable part
+    # and mark each invalid character instead of rejecting the whole archive.
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
+    safe = safe.rstrip(' .')
+    if not safe:
+        safe = '_sheet.json'
+    stem, suffix = Path(safe).stem, Path(safe).suffix
+    if stem.split('.')[0].rstrip(' ').casefold() in WINDOWS_RESERVED_NAMES:
+        safe = f'_{stem}{suffix}'
+    # Keep each flattened filename below the Windows component limit while
+    # retaining its extension.
+    if len(safe) > 240:
+        stem, suffix = Path(safe).stem, Path(safe).suffix
+        safe = f'{stem[:240 - len(suffix)]}{suffix}'
+    return safe
+
+
 def extract_library(archive_path, destination, expected_count):
     used = set()
     with zipfile.ZipFile(archive_path) as archive:
@@ -74,12 +101,11 @@ def extract_library(archive_path, destination, expected_count):
                 raise ValueError('Unsafe path in sheet archive')
             if member.is_dir() or not included_sheet(path):
                 continue
-            if re.search(r'[<>:"/\\|?*\x00-\x1f]', path.name) or path.name.endswith((' ', '.')):
-                raise ValueError(f'Unsupported sheet filename: {path.name}')
-            filename = path.name
+            filename = safe_windows_filename(path.name)
+            safe_path = Path(filename)
             counter = 1
             while filename.casefold() in used:
-                filename = f'{path.stem} ({counter}){path.suffix}'
+                filename = f'{safe_path.stem} ({counter}){safe_path.suffix}'
                 counter += 1
             used.add(filename.casefold())
             with archive.open(member) as source, (destination / filename).open('wb') as target:
@@ -109,7 +135,7 @@ def copy_licenses(destination):
         shutil.copyfile(python_license, notices / 'Python-LICENSE.txt')
 
 
-def stage(output, release_tag):
+def stage(output, release_tag, sheet_archive=None):
     info = metadata(release_tag)
     dist = output / 'play_music_qt.dist'
     if not (dist / 'SkyAutoMusic.exe').is_file():
@@ -121,11 +147,12 @@ def stage(output, release_tag):
     url = descriptor['asset_url']
     if not url.startswith('https://github.com/') or not re.fullmatch(r'[0-9a-f]{64}', descriptor['sha256']):
         raise ValueError('Invalid pinned sheet archive descriptor')
-    archive_path = output / 'sheet-library.zip'
-    request = urllib.request.Request(url, headers={'User-Agent': 'SkyAutoMusic-GitHub-Actions'})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=120) as source, archive_path.open('wb') as target:
-        shutil.copyfileobj(source, target)
+    archive_path = sheet_archive or output / 'sheet-library.zip'
+    if sheet_archive is None:
+        request = urllib.request.Request(url, headers={'User-Agent': 'SkyAutoMusic-GitHub-Actions'})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=120) as source, archive_path.open('wb') as target:
+            shutil.copyfileobj(source, target)
     if sha256(archive_path) != descriptor['sha256']:
         raise ValueError('Sheet archive SHA-256 does not match the pinned manifest')
     if archive_path.stat().st_size != descriptor['size']:
@@ -223,6 +250,8 @@ def main():
     parser.add_argument('operation', choices=('metadata', 'stage', 'finalize'))
     parser.add_argument('--release-tag', default='')
     parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'windows')
+    parser.add_argument('--sheet-archive', type=Path,
+                        help='Use a local sheet archive; pinned size and SHA-256 are still verified')
     parser.add_argument('--github-output', type=Path)
     args = parser.parse_args()
     if args.operation == 'metadata':
@@ -232,7 +261,8 @@ def main():
                 stream.write(f"version={info['version']}\n")
         print(json.dumps(info, ensure_ascii=False))
     elif args.operation == 'stage':
-        stage(args.output.resolve(), args.release_tag)
+        stage(args.output.resolve(), args.release_tag,
+              args.sheet_archive.resolve() if args.sheet_archive else None)
     else:
         finalize(args.output.resolve(), args.release_tag)
 
