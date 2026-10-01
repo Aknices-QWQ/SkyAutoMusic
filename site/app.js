@@ -89,7 +89,14 @@ async function refreshLatestRelease() {
     });
     if (!response.ok) return;
     const app = appFromRelease(await response.json());
-    if (!app || compareVersions(app.version, state.manifest.app.version) < 0) return;
+    if (!app) return;
+    const comparison = compareVersions(app.version, state.manifest.app.version);
+    if (comparison < 0) return;
+    if (comparison === 0) {
+      for (const edition of ["lite", "full"]) {
+        app[edition] = { ...state.manifest.app[edition], ...app[edition] };
+      }
+    }
     state.manifest.app = { ...state.manifest.app, ...app };
     render();
   } catch {
@@ -119,7 +126,7 @@ function render() {
       ? "以下功能已合并到最新源码，正式安装包以下载区的版本为准。"
       : "以下功能已包含在当前正式版，可在下载区获取安装包。";
   }
-  elements.count.textContent = Number(state.manifest.sheets.count).toLocaleString("zh-CN");
+  elements.count.textContent = Number(state.manifest.app.full.sheet_count || state.manifest.sheets.count).toLocaleString("zh-CN");
   elements.liteSize.textContent = formatBytes(state.manifest.app.lite.size);
   elements.fullSize.textContent = formatBytes(state.manifest.app.full.size);
   elements.note.textContent = elements.mirror.value

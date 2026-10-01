@@ -6,8 +6,8 @@
   <meta name="description" content="SkyAutoMusic — Sky 光·遇开源音乐工具。下载最新正式版，了解制谱、内置音色、悬浮琴谱、MIDI 接入、歌曲段落与进度续播。">
   <meta name="theme-color" content="#0a0b0c">
   <title>SkyAutoMusic · 让每一次演奏更从容</title>
-  <link rel="stylesheet" href="/styles.css?v=20261001">
-  <script src="/app.js?v=20261001" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20261001-v1013">
+  <script src="/app.js?v=20261001-v1013" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -39,9 +39,9 @@
           <a class="button button-secondary" href="#request">提交扒谱请求</a>
           <a class="button button-secondary" href="https://github.com/Aknices-QWQ/SkyAutoMusic" target="_blank" rel="noreferrer">打开 GitHub ↗</a>
         </div>
-        <p class="version-summary"><a href="#download">正式版 <span id="hero-release-version">v1.0.8</span></a><span>最新源码 <span id="hero-source-version">v1.0.13</span></span></p>
+        <p class="version-summary"><a href="#download">正式版 <span id="hero-release-version">v1.0.13</span></a><span>最新源码 <span id="hero-source-version">v1.0.13</span></span></p>
         <dl class="hero-stats">
-          <div><dt id="sheet-count">17,700</dt><dd>首可用曲谱</dd></div>
+          <div><dt id="sheet-count">18,332</dt><dd>首可用曲谱</dd></div>
           <div><dt>1.00x</dt><dd>忠于原曲 BPM</dd></div>
           <div><dt>F3</dt><dd>随时呼出悬浮窗</dd></div>
         </dl>
@@ -79,9 +79,9 @@
 
     <section class="section features" id="features" aria-labelledby="features-title">
       <div class="section-heading">
-        <p>最新源码 · <span id="feature-source-version">v1.0.13</span></p>
+        <p>版本 · <span id="feature-source-version">v1.0.13</span></p>
         <h2 id="features-title">找谱、制谱、练习，各有入口</h2>
-        <span id="feature-availability">以下功能已合并到最新源码，正式安装包以下载区的版本为准。</span>
+        <span id="feature-availability">以下功能已包含在当前正式版，可在下载区获取安装包。</span>
       </div>
       <ol class="feature-list">
         <li><b>01</b><div><h3>找谱与实时识曲</h3><p>搜索歌名、在线转换、导入 MIDI / JSON。实时识曲可从电脑声音中匹配本地曲库，清楚的单音旋律效果更好。</p></div></li>
@@ -101,21 +101,21 @@
         <h2 id="download-title">下载已发布的安装包</h2>
         <span>Windows 64 位安装器。默认普通权限；若游戏无法接收按键，可在设置中开启管理员模式。</span>
       </div>
-      <div class="source-notice" id="source-notice">
-        <div><strong>想用最新功能？</strong><p id="source-status">v1.0.13 已合并到源码，尚未发布正式安装包；下方下载的是 v1.0.8。</p></div>
+      <div class="source-notice" id="source-notice" hidden>
+        <div><strong>想用最新功能？</strong><p id="source-status">当前正式版 v1.0.13 已包含以下功能。</p></div>
         <a class="button button-secondary" id="build-link" href="https://github.com/Aknices-QWQ/SkyAutoMusic/actions/workflows/windows-build.yml" target="_blank" rel="noreferrer">查看最新构建 ↗</a>
       </div>
       <div class="download-shell">
         <div class="edition-list" role="radiogroup" aria-label="选择下载版本">
           <label class="edition-card is-selected">
             <input type="radio" name="edition" value="lite" checked>
-            <span class="edition-main"><strong>Lite 精简版</strong><small>内置定制曲，可在应用内更新完整曲库</small></span>
-            <span class="edition-size" id="lite-size">22.6 MB</span>
+            <span class="edition-main"><strong>Lite 精简版</strong><small>内置两首曲谱，可在应用内更新完整曲库</small></span>
+            <span class="edition-size" id="lite-size">78.6 MB</span>
           </label>
           <label class="edition-card">
             <input type="radio" name="edition" value="full">
             <span class="edition-main"><strong>Full 完整版</strong><small>附带全部曲谱，安装后即可离线使用</small></span>
-            <span class="edition-size" id="full-size">58.0 MB</span>
+            <span class="edition-size" id="full-size">114.0 MB</span>
           </label>
         </div>
         <div class="download-options">
@@ -125,13 +125,13 @@
             <option value="https://gh-proxy.com/">备用镜像 · gh-proxy.com</option>
             <option value="">GitHub 直连</option>
           </select>
-          <a class="button button-primary download-button" id="download-button" href="https://ghfast.top/https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.8/SkyAutoMusic-v1.0.8-Lite-Setup.exe">下载 Lite 精简版</a>
-          <p class="download-meta"><span id="release-version">v1.0.8</span><span>Windows 64 位</span><span>默认普通权限</span></p>
+          <a class="button button-primary download-button" id="download-button" href="https://ghfast.top/https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.13/SkyAutoMusic-v1.0.13-Lite-Setup.exe">下载 Lite 精简版</a>
+          <p class="download-meta"><span id="release-version">v1.0.13</span><span>Windows 64 位</span><span>默认普通权限</span></p>
           <div class="checksum-row"><code id="checksum">SHA-256 加载中…</code><button type="button" id="copy-checksum">复制</button></div>
           <p class="download-note" id="download-note">国内线路会通过所选镜像转发 GitHub Release 下载。</p>
         </div>
       </div>
-      <p class="release-links"><a id="release-notes-link" href="https://github.com/Aknices-QWQ/SkyAutoMusic/releases/tag/v1.0.8" target="_blank" rel="noreferrer">查看正式版更新说明 ↗</a><a href="https://github.com/Aknices-QWQ/SkyAutoMusic/blob/main/docs/song-sections.md" target="_blank" rel="noreferrer">歌曲段落与续播用法 ↗</a></p>
+      <p class="release-links"><a id="release-notes-link" href="https://github.com/Aknices-QWQ/SkyAutoMusic/releases/tag/v1.0.13" target="_blank" rel="noreferrer">查看正式版更新说明 ↗</a><a href="https://github.com/Aknices-QWQ/SkyAutoMusic/blob/main/docs/song-sections.md" target="_blank" rel="noreferrer">歌曲段落与续播用法 ↗</a></p>
     </section>
 
     <section class="section request-section" id="request" aria-labelledby="request-title">

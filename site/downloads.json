@@ -1,20 +1,22 @@
 {
   "app": {
-    "version": "1.0.8",
-    "released_at": "2026-09-16",
-    "release_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/tag/v1.0.8",
+    "version": "1.0.13",
+    "released_at": "2026-10-01",
+    "release_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/tag/v1.0.13",
     "repository": "https://github.com/Aknices-QWQ/SkyAutoMusic",
     "lite": {
-      "name": "SkyAutoMusic-v1.0.8-Lite-Setup.exe",
-      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.8/SkyAutoMusic-v1.0.8-Lite-Setup.exe",
-      "size": 23680618,
-      "sha256": "ce77181968f147937783abf42d85bf850ef98dc9ca078e268a424d2ba37dfc20"
+      "name": "SkyAutoMusic-v1.0.13-Lite-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.13/SkyAutoMusic-v1.0.13-Lite-Setup.exe",
+      "size": 82429592,
+      "sha256": "d28555e1d0ff9b2d4326b6c4f786b4ff04a1cc67eda79be5e7c75e98b1ea377a",
+      "sheet_count": 2
     },
     "full": {
-      "name": "SkyAutoMusic-v1.0.8-Full-Setup.exe",
-      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.8/SkyAutoMusic-v1.0.8-Full-Setup.exe",
-      "size": 60784749,
-      "sha256": "67a6c568d20dd4c35f33a846c24e0922f806ac096f223efd4238e0997c76dc84"
+      "name": "SkyAutoMusic-v1.0.13-Full-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.13/SkyAutoMusic-v1.0.13-Full-Setup.exe",
+      "size": 119495225,
+      "sha256": "92ed0c329e9fe326b3031cef83baeef75b3ab7fe569f361a56eea336a3819dba",
+      "sheet_count": 18332
     }
   },
   "source": {
@@ -31,8 +33,17 @@
     "updates": []
   },
   "mirrors": [
-    { "name": "国内镜像 · ghfast.top", "prefix": "https://ghfast.top/" },
-    { "name": "备用镜像 · gh-proxy.com", "prefix": "https://gh-proxy.com/" },
-    { "name": "GitHub 直连", "prefix": "" }
+    {
+      "name": "国内镜像 · ghfast.top",
+      "prefix": "https://ghfast.top/"
+    },
+    {
+      "name": "备用镜像 · gh-proxy.com",
+      "prefix": "https://gh-proxy.com/"
+    },
+    {
+      "name": "GitHub 直连",
+      "prefix": ""
+    }
   ]
 }
