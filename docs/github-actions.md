@@ -2,10 +2,14 @@
 
 工作流：`.github/workflows/windows-build.yml`，在标准 `windows-2022` 运行器上使用 Python 3.11、Nuitka 和 MSVC 编译，再由 Inno Setup 生成 Lite / Full 安装包。
 
+## 合并后自动构建
+
+每次向 `main` 推送提交或合并 PR 都会自动构建 Lite / Full 安装包。进入 **Actions → Windows installers** 查看进度；成功后从该次运行的 **Artifacts** 下载。`main` 的构建只上传产物，不创建 GitHub Release。
+
 ## 手动生成安装包
 
 1. 打开仓库的 **Actions → Windows installers → Run workflow**。
-2. 选择要编译的分支或标签，点击 **Run workflow**。本次新增功能的源码在 `codex/overlay-score-midi-sky` 分支。
+2. 选择要编译的分支或标签，点击 **Run workflow**。已合并的最新功能请选择 `main`。
 3. 完成后，在运行详情的 **Artifacts** 下载 `SkyAutoMusic-v版本-windows`。
 
 手动选择分支只生成构建产物，不创建 GitHub Release。产物包含两个安装器、SHA-256 校验和、构建信息及发布说明，保留 7 天。工作流不会启动桌面程序或操作游戏。
