@@ -4,10 +4,10 @@ SkyAutoMusic 是面向 Windows 的《Sky 光·遇》自动演奏工具，提供�
 
 ## 下载
 
-请从 [sky.xxlab.dev](https://sky.xxlab.dev) 下载：
+请从 [GitHub 最新发布](https://github.com/Aknices-QWQ/SkyAutoMusic/releases/latest) 或 [sky.xxlab.dev](https://sky.xxlab.dev) 下载：
 
 - **Lite 精简版**：体积更小，内置《最后一吻》和《Call of Silence》，首次启动后可从 GitHub 更新完整曲库。
-- **Full 完整版**：附带全部曲目，解压后即可离线使用。
+- **Full 完整版**：附带全部曲目，安装后即可离线使用。
 - 国内网络可以在网站或应用内选择预设 GitHub 镜像线路。
 
 下载安装器后按提示完成安装即可。默认安装到当前用户目录，程序和曲库更新使用普通用户权限；若游戏无法接收按键，可在应用设置中开启管理员模式。
@@ -123,11 +123,11 @@ python play_music_qt.py
 程序使用 Nuitka standalone 构建，再由 Inno Setup 封装成普通用户权限安装器；未使用 PyInstaller：
 
 ```powershell
-python -m pip install nuitka ordered-set zstandard
-python -m nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable --include-package=keyboard --include-data-dir=assets=assets play_music_qt.py
+python -m pip install -r requirements.txt nuitka ordered-set zstandard
+python -m nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable --include-package=keyboard --include-data-dir=assets=assets --include-data-dir=mobile/web=mobile/web --output-filename=SkyAutoMusic.exe play_music_qt.py
 ```
 
-准备 Lite 或 Full 文件目录后，可使用 `installer.iss` 生成安装器。默认安装到当前用户的 LocalAppData，因此应用内曲库更新不需要管理员权限。
+准备 Lite 或 Full 文件目录后，可使用 `installer.iss` 生成安装器。发布目录需包含干净的默认 `config.json` 和空 `favorites.json`，不要复制个人配置、收藏和缓存。默认安装到当前用户的 LocalAppData，因此应用内曲库更新不需要管理员权限；升级会保留已有配置与收藏。
 
 ## 曲谱格式
 

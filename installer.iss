@@ -1,5 +1,5 @@
 #define MyAppName "SkyAutoMusic"
-#define MyAppVersion "1.0.12"
+#define MyAppVersion "1.0.13"
 #ifndef Edition
   #define Edition "Lite"
 #endif
@@ -33,7 +33,7 @@ WizardStyle=modern
 SetupLogging=yes
 UninstallDisplayIcon={app}\SkyAutoMusic.exe
 LicenseFile=LICENSE
-VersionInfoVersion=1.0.12.0
+VersionInfoVersion=1.0.13.0
 VersionInfoCompany=Aknices && BA4KQS
 VersionInfoDescription=SkyAutoMusic {#Edition} Installer
 VersionInfoProductName=SkyAutoMusic

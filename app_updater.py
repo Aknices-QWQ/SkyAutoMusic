@@ -5,7 +5,7 @@ import re
 from urllib.parse import urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
-APP_VERSION = "1.0.12"
+APP_VERSION = "1.0.13"
 APP_REPOSITORY = "Aknices-QWQ/SkyAutoMusic"
 RELEASES_URL = f"https://github.com/{APP_REPOSITORY}/releases/latest"
 RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
