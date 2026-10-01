@@ -2,6 +2,12 @@
 .venv-basic-pitch/
 __pycache__/
 *.pyc
+.pytest_cache/
+/_test_tmp/
+/artifacts/
+/output/
+/.playwright-mcp/
+/search-index.json
 .release-build*/
 .release-work/
 .release-artifacts*/
@@ -9,6 +15,9 @@ __pycache__/
 .release-installers*/
 .nuitka-cache/
 .wrangler/
+/Sky Sounds/
+/recognition-index.json.gz
+/recognition-index.json.gz.tmp
 /Sheet Music/Sky1984 - *.json
 /sources/Sky1984-Sheets-Collection-*.zip
 /sources/Sky1984-Sheets-Collection-*.zip.part

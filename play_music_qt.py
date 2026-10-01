@@ -17,8 +17,9 @@ from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlencode
 
-from PySide6.QtCore import QFile, QObject, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QFile, QObject, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QCursor, QDesktopServices, QIcon, QPainter, QPixmap, QShortcut, QKeySequence
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QSoundEffect
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -47,6 +49,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStyle,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -62,6 +65,17 @@ from sheet_updater import (
 
 import piastudy
 from app_updater import APP_VERSION, compare_versions, fetch_latest_release
+from midi_practice import MidiPracticePage
+from midi_sky import MidiSkyPanel
+from floating_score import FloatingScoreView
+from mobile_remote import MobileRemoteServer, create_pairing_token
+from score_editor import ScoreEditorPage
+from sky_sounds import (
+    INSTRUMENT_CUSTOM_ICONS, INSTRUMENT_ICON_CODES, INSTRUMENT_LABELS, LOCATION_PRESETS, PITCHES,
+    SAMPLE_COUNTS, SPECY_INSTRUMENTS, SOURCE_URL, download_specy_instrument,
+    instrument_folders, pitch_semitones, pitched_wave, sample_files,
+)
+from realtime_recognizer import RealtimeRecognizer, list_loopback_devices
 
 
 def executable_path():
@@ -324,6 +338,17 @@ class PlayerSignals(QObject):
     play_stop_requested = Signal()
     stop_requested = Signal()
     toggle_overlay_requested = Signal()
+    mobile_action = Signal(dict)
+    preview_requested = Signal(list)
+    score_step_requested = Signal(int)
+    overlay_lock_requested = Signal()
+    score_scroll_requested = Signal()
+
+
+class SkySoundSignals(QObject):
+    progress = Signal(int, int)
+    finished = Signal(str)
+    failed = Signal(str)
 
 
 class UpdateSignals(QObject):
@@ -416,6 +441,7 @@ class FloatingControl(QWidget):
         self.setWindowTitle("悬浮控制")
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setObjectName("FloatingControl")
 
         outer = QVBoxLayout(self)
@@ -525,6 +551,55 @@ class FloatingControl(QWidget):
         controls.addWidget(self.main_btn, 1)
         root.addLayout(controls)
 
+        guide_controls = QHBoxLayout()
+        self.score_button = QPushButton("琴谱")
+        self.score_button.setCheckable(True)
+        self.score_button.setChecked(bool(main.config.get("overlay_show_score", False)))
+        self.score_button.setToolTip("显示光遇 15 键琴谱；F5 上一组，F6 下一组，F9 自动翻谱")
+        self.score_button.clicked.connect(self.toggle_score)
+        self.lock_button = QPushButton("穿透")
+        self.lock_button.setCheckable(True)
+        self.lock_button.setToolTip("鼠标穿透到游戏；F4 解除穿透，F3 隐藏悬浮窗")
+        self.lock_button.clicked.connect(self.set_input_locked)
+        self.midi_button = QPushButton("MIDI 接入")
+        self.midi_button.clicked.connect(main.show_game_midi)
+        self.opacity = QComboBox()
+        self.opacity.setAccessibleName("悬浮窗不透明度")
+        for value in (100, 85, 70):
+            self.opacity.addItem(f"{value}%", value)
+        self.opacity.setCurrentIndex(max(0, self.opacity.findData(main.config.get("overlay_opacity", 100))))
+        self.opacity.currentIndexChanged.connect(lambda _: self.setWindowOpacity(self.opacity.currentData() / 100))
+        self.setWindowOpacity(self.opacity.currentData() / 100)
+        for widget in (self.score_button, self.lock_button, self.midi_button, self.opacity):
+            guide_controls.addWidget(widget)
+        root.addLayout(guide_controls)
+
+        self.score_panel = QWidget()
+        score_layout = QVBoxLayout(self.score_panel)
+        score_layout.setContentsMargins(0, 0, 0, 0)
+        score_layout.setSpacing(5)
+        self.score_view = FloatingScoreView()
+        score_layout.addWidget(self.score_view)
+        score_actions = QHBoxLayout()
+        self.previous_button = QPushButton("上一组")
+        self.next_button = QPushButton("下一组")
+        self.auto_score_button = QPushButton("自动翻谱")
+        self.auto_score_button.setCheckable(True)
+        self.midi_follow = QCheckBox("MIDI 跟谱")
+        self.midi_follow.setToolTip("接入光遇后，弹对当前音符组再显示下一组；重复音需松开再弹。")
+        self.previous_button.clicked.connect(lambda: self.step_score(-1))
+        self.next_button.clicked.connect(lambda: self.step_score(1))
+        self.auto_score_button.clicked.connect(self.toggle_score_scroll)
+        self.midi_follow.toggled.connect(lambda enabled: enabled and self.stop_score_scroll())
+        for widget in (self.previous_button, self.next_button, self.auto_score_button, self.midi_follow):
+            score_actions.addWidget(widget)
+        score_layout.addLayout(score_actions)
+        root.addWidget(self.score_panel)
+        self.score_panel.setVisible(self.score_button.isChecked())
+        self.score_timer = QTimer(self)
+        self.score_timer.setSingleShot(True)
+        self.score_timer.timeout.connect(self.score_scroll_tick)
+
         status_row = QHBoxLayout()
         status_row.setSpacing(5)
         self.status_label = QLabel("待机")
@@ -542,8 +617,99 @@ class FloatingControl(QWidget):
         status_row.addWidget(self.request_btn)
         root.addLayout(status_row)
         self.setMinimumSize(340, 188)
-        self.resize(380, 202)
+        self.resize(400, 540 if self.score_button.isChecked() else 240)
         self.refresh()
+
+    def toggle_score(self):
+        visible = self.score_button.isChecked()
+        self.score_panel.setVisible(visible)
+        if not visible:
+            self.stop_score_scroll()
+        self.resize(max(400, self.width()), 540 if visible else 240)
+        self.main.save_config()
+
+    def set_input_locked(self, locked):
+        if locked and not getattr(self.main, "global_hotkeys_registered", False):
+            self.lock_button.setChecked(False)
+            self.status_label.setText("全局 F4 不可用，暂时无法开启穿透")
+            return
+        visible = self.isVisible()
+        remaining = self.score_timer.remainingTime()
+        self.lock_button.setChecked(bool(locked))
+        self.setWindowFlag(Qt.WindowTransparentForInput, bool(locked))
+        self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, bool(locked))
+        if visible:
+            self.show()
+            if remaining >= 0:
+                self.auto_score_button.setChecked(True)
+                self.score_timer.start(max(1, remaining))
+
+    def set_score(self, notes_by_time):
+        self.stop_score_scroll()
+        self.score_view.cursor.set_score(notes_by_time)
+        self.score_view.cursor.held.clear()
+        self.score_view.update()
+
+    def step_score(self, step):
+        if not self.isVisible() or not self.score_button.isChecked():
+            return
+        self.stop_score_scroll()
+        self.score_view.cursor.move(step)
+        self.score_view.update()
+
+    def stop_score_scroll(self):
+        self.score_timer.stop()
+        self.auto_score_button.setChecked(False)
+
+    def toggle_score_scroll(self):
+        if not self.isVisible() or not self.score_button.isChecked():
+            self.stop_score_scroll()
+            return
+        if not self.auto_score_button.isChecked():
+            self.stop_score_scroll()
+            return
+        if self.main.previewing or (self.main.player_thread and self.main.player_thread.is_alive()):
+            self.main.stop_play()
+        self.auto_score_button.setChecked(True)
+        self.midi_follow.setChecked(False)
+        cursor = self.score_view.cursor
+        if not cursor.groups:
+            self.stop_score_scroll()
+            return
+        if cursor.index >= len(cursor.groups):
+            cursor.seek(0)
+        self.score_view.update()
+        self.schedule_score_tick()
+
+    def schedule_score_tick(self):
+        cursor = self.score_view.cursor
+        index = cursor.index
+        if index >= len(cursor.groups):
+            self.stop_score_scroll()
+            return
+        gap = (cursor.groups[index + 1][0] - cursor.groups[index][0]
+               if index + 1 < len(cursor.groups) else 60000 / max(1, self.main.bpm))
+        self.score_timer.start(max(1, round(gap / self.main.speed())))
+
+    def score_scroll_tick(self):
+        self.score_view.cursor.move(1)
+        self.score_view.update()
+        self.schedule_score_tick()
+
+    def follow_playback(self, time_ms):
+        cursor = self.score_view.cursor
+        if cursor.groups:
+            cursor.seek(bisect_left([group[0] for group in cursor.groups], time_ms))
+            self.score_view.update()
+
+    def feed_game_midi(self, keys):
+        if self.midi_follow.isChecked() and self.score_button.isChecked():
+            self.score_view.cursor.feed(keys)
+            self.score_view.update()
+
+    def hideEvent(self, event):
+        self.stop_score_scroll()
+        super().hideEvent(event)
 
     def refresh(self):
         self.mode.blockSignals(True)
@@ -711,25 +877,287 @@ class SheetSearchIndex(QObject):
             return self.entries.get(filename, "")
 
 
+class LoopbackScanSignals(QObject):
+    finished = Signal(list, str)
+
+
+class RealtimeRecognizerPage(QWidget):
+    """Local computer-audio melody recognition controls."""
+
+    def __init__(self, host, sheet_dir, parent=None):
+        super().__init__(parent)
+        self.host = host
+        self.recognizer = RealtimeRecognizer(sheet_dir, self, APP_DIR / "recognition-index.json.gz")
+        self._stopping = self._closing = self._scanned = False
+        self._scan_thread = None
+        self.scan_signals = LoopbackScanSignals(self)
+        self.scan_signals.finished.connect(self.on_devices)
+        self._build_ui()
+        self.recognizer.status.connect(self.on_status)
+        self.recognizer.level.connect(self.on_level)
+        self.recognizer.notes_changed.connect(self.notes_label.setText)
+        self.recognizer.results.connect(self.on_results)
+        self.recognizer.finished.connect(self.on_finished)
+        self.refresh_button.clicked.connect(self.refresh_devices)
+        self.start_button.clicked.connect(self.start_listening)
+        self.stop_button.clicked.connect(self.stop_listening)
+        self.results_list.itemDoubleClicked.connect(self.open_result)
+        self.open_button.clicked.connect(self.open_selected)
+        self.clear_button.clicked.connect(self.clear_listening)
+        self.results_list.currentItemChanged.connect(lambda item, _: self.open_button.setEnabled(item is not None))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._scanned:
+            self.refresh_devices()
+
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setObjectName("TranscribePanel")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        body.setObjectName("TranscribePanel")
+        body.setAttribute(Qt.WA_StyledBackground, True)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+
+        title = QLabel("实时识曲")
+        title.setObjectName("CardTitle")
+        root.addWidget(title)
+        intro = QLabel(
+            "听电脑里正在演奏的旋律，匹配本地曲库。全程离线，音频不会保存。"
+        )
+        intro.setObjectName("MutedText")
+        intro.setWordWrap(True)
+        root.addWidget(intro)
+
+        device_row = QHBoxLayout()
+        device_row.addWidget(QLabel("声音来源"))
+        self.device_combo = QComboBox()
+        self.device_combo.setMinimumWidth(220)
+        self.device_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.device_combo.addItem("默认输出设备", None)
+        self.device_combo.setAccessibleName("电脑声音来源")
+        device_row.addWidget(self.device_combo, 1)
+        self.refresh_button = QPushButton("刷新设备")
+        device_row.addWidget(self.refresh_button)
+        root.addLayout(device_row)
+
+        action_row = QHBoxLayout()
+        self.start_button = QPushButton("开始监听")
+        self.start_button.setObjectName("PrimaryButton")
+        self.stop_button = QPushButton("停止")
+        self.stop_button.setEnabled(False)
+        self.clear_button = QPushButton("重新听一段")
+        self.clear_button.setEnabled(False)
+        action_row.addWidget(self.start_button)
+        action_row.addWidget(self.stop_button)
+        action_row.addWidget(self.clear_button)
+        action_row.addStretch()
+        root.addLayout(action_row)
+
+        self.level_bar = QProgressBar()
+        self.level_bar.setRange(0, 100)
+        self.level_bar.setValue(0)
+        self.level_bar.setTextVisible(False)
+        self.level_bar.setMaximumHeight(10)
+        self.level_bar.setAccessibleName("声音电平")
+        root.addWidget(self.level_bar)
+        self.status_label = QLabel("请选择声音来源后开始监听")
+        self.status_label.setObjectName("MutedText")
+        self.status_label.setWordWrap(True)
+        root.addWidget(self.status_label)
+
+        notes_row = QHBoxLayout()
+        notes_row.addWidget(QLabel("听到的音符"))
+        self.notes_label = QLabel("—")
+        self.notes_label.setObjectName("MutedText")
+        self.notes_label.setWordWrap(True)
+        self.notes_label.setMaximumHeight(44)
+        notes_row.addWidget(self.notes_label, 1)
+        root.addLayout(notes_row)
+
+        result_title = QLabel("匹配曲谱")
+        result_title.setObjectName("CardTitle")
+        result_row = QHBoxLayout()
+        result_row.addWidget(result_title)
+        result_row.addStretch()
+        self.open_button = QPushButton("打开选中曲谱")
+        self.open_button.setEnabled(False)
+        result_row.addWidget(self.open_button)
+        root.addLayout(result_row)
+        self.results_list = QListWidget()
+        self.results_list.setMinimumHeight(120)
+        self.results_list.setAccessibleName("识曲结果")
+        root.addWidget(self.results_list, 1)
+        hint = QLabel("试验功能：建议独奏并减小背景音乐，连续听至少 12 次音高变化。复杂和弦或多人合奏会影响结果，曲库外的歌曲无法识别。")
+        hint.setObjectName("MutedText")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
+    def refresh_devices(self):
+        if self.recognizer.running or (self._scan_thread and self._scan_thread.is_alive()):
+            return
+        self._scanned = True
+        self.start_button.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+        self.on_status("正在查找电脑声音来源…")
+
+        def scan():
+            devices, error = list_loopback_devices()
+            if not self._closing:
+                try:
+                    self.scan_signals.finished.emit(devices, error)
+                except RuntimeError:
+                    pass
+
+        self._scan_thread = threading.Thread(target=scan, name="SkyAudioDevices", daemon=True)
+        self._scan_thread.start()
+
+    def on_devices(self, devices, error):
+        if self._closing:
+            return
+        selected_name = self.device_combo.currentText()
+        self.device_combo.blockSignals(True)
+        self.device_combo.clear()
+        self.device_combo.addItem("默认输出设备", None)
+        for index, name in devices:
+            self.device_combo.addItem(name, index)
+        self.device_combo.setCurrentIndex(max(0, self.device_combo.findText(selected_name)))
+        self.device_combo.blockSignals(False)
+        self.start_button.setEnabled(bool(devices) and not error)
+        self.refresh_button.setEnabled(True)
+        if error:
+            self.on_status(f"无法读取电脑声音设备：{error}")
+        elif devices:
+            self.on_status(f"找到 {len(devices)} 个电脑声音来源")
+        else:
+            self.on_status("没有找到 WASAPI 回环设备；请确认 Windows 音频输出可用")
+
+    def start_listening(self):
+        device_index = self.device_combo.currentData()
+        device_name = self.device_combo.currentText() if device_index is not None else None
+        self._stopping = False
+        self.results_list.clear()
+        self.open_button.setEnabled(False)
+        self.notes_label.setText("—")
+        self.level_bar.setValue(0)
+        if not self.recognizer.start(device_index, device_name):
+            return
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.clear_button.setEnabled(True)
+        self.device_combo.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+
+    def stop_listening(self):
+        if not self.recognizer.running:
+            return
+        self._stopping = True
+        self.recognizer.stop()
+        self.stop_button.setEnabled(False)
+        self.clear_button.setEnabled(False)
+        self.status_label.setText("正在停止监听…")
+
+    def clear_listening(self):
+        self.recognizer.clear()
+        self.results_list.clear()
+        self.open_button.setEnabled(False)
+        self.notes_label.setText("—")
+        self.status_label.setText("监听中 · 重新收集旋律…")
+
+    def on_status(self, message):
+        if not self._stopping:
+            self.status_label.setText(str(message))
+
+    def on_level(self, value):
+        self.level_bar.setValue(round(value * 100))
+
+    def on_results(self, matches):
+        if self._stopping or self._closing:
+            return
+        selected = self.results_list.currentItem()
+        filename = selected.data(Qt.UserRole) if selected else None
+        self.results_list.clear()
+        for match in matches:
+            item = QListWidgetItem(
+                f"{match['title']}    ·    音符吻合 {match['score'] * 100:.0f}%"
+            )
+            item.setData(Qt.UserRole, match["filename"])
+            item.setToolTip(f"{match['filename']}\n音符吻合度用于比较候选，不代表识别正确概率。")
+            self.results_list.addItem(item)
+            if match['filename'] == filename:
+                self.results_list.setCurrentItem(item)
+        if matches and self.results_list.currentRow() < 0:
+            self.results_list.setCurrentRow(0)
+        self.open_button.setEnabled(self.results_list.currentItem() is not None)
+        if matches:
+            self.status_label.setText(f"监听中 · 最接近《{matches[0]['title']}》；继续演奏可比较候选")
+        else:
+            self.status_label.setText("监听中 · 暂未匹配，继续听一段清楚的旋律…")
+
+    def on_finished(self):
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.clear_button.setEnabled(False)
+        self.device_combo.setEnabled(True)
+        self.refresh_button.setEnabled(True)
+        self.level_bar.setValue(0)
+        if self._stopping:
+            self.status_label.setText("监听已停止")
+        self._stopping = False
+
+    def open_selected(self):
+        item = self.results_list.currentItem()
+        if item:
+            self.open_result(item)
+
+    def open_result(self, item):
+        filename = item.data(Qt.UserRole)
+        if not filename:
+            return
+        if filename not in self.host.all_files:
+            self.status_label.setText("该曲谱已从曲库移除，请重新识别。")
+            return
+        self.stop_listening()
+        self.host.select_file(filename)
+        self.host.pages.setCurrentWidget(self.host.play_page)
+        self.host.nav_play.setChecked(True)
+        self.host.set_status(f"已打开识曲结果：{self.host.display_song_name(filename)}")
+
+    def shutdown(self):
+        self._closing = True
+        self.recognizer.shutdown()
+        if self._scan_thread and self._scan_thread.is_alive():
+            self._scan_thread.join(timeout=1.0)
+
+
 class PiastudySignals(QObject):
     search_done = Signal(list, str)
     convert_done = Signal(dict, str)
+    browser_done = Signal(bool, str)
+    browser_progress = Signal(str)
 
 
-class PiastudySearchDialog(QDialog):
+class PiastudySearchPanel(QWidget):
     """在 piastudy 上搜索曲谱并一键转换到本地曲库。"""
 
     def __init__(self, parent, query=""):
         super().__init__(parent)
-        self.setWindowTitle("piastudy 搜索转换")
-        self.setModal(True)
-        self.resize(580, 540)
-        self.setMinimumSize(460, 420)
+        self.host = parent
         self.results = []
         self._thread = None
         self.signals = PiastudySignals()
         self.signals.search_done.connect(self._on_search_done)
         self.signals.convert_done.connect(self._on_convert_done)
+        self.signals.browser_done.connect(self._on_browser_done)
+        self.signals.browser_progress.connect(self._on_browser_progress)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -745,17 +1173,35 @@ class PiastudySearchDialog(QDialog):
         search_row.addWidget(self.search_btn)
         layout.addLayout(search_row)
 
-        self.hands_combo = QComboBox()
-        self.hands_combo.addItem("纯旋律（推荐）", True)
-        self.hands_combo.addItem("双手版", False)
-        layout.addWidget(self.hands_combo)
+        link_row = QHBoxLayout()
+        self.url_box = QLineEdit()
+        self.url_box.setPlaceholderText("粘贴 PiaStudy 歌曲详情页链接")
+        self.url_box.returnPressed.connect(self.import_from_url)
+        self.url_btn = QPushButton("按链接导入")
+        self.url_btn.setToolTip("直接抓取已打开的 PiaStudy 歌曲详情页")
+        self.url_btn.clicked.connect(self.import_from_url)
+        link_row.addWidget(self.url_box, 1)
+        link_row.addWidget(self.url_btn)
+        layout.addLayout(link_row)
 
-        conversion_hint = QLabel(
-            "提示：转换结果可能与原曲存在差异；如果听感不一致，请更换同曲的其他版本。"
-        )
-        conversion_hint.setObjectName("MutedText")
-        conversion_hint.setWordWrap(True)
-        layout.addWidget(conversion_hint)
+        browser_row = QHBoxLayout()
+        self.browser_check = QCheckBox("使用无头浏览器")
+        self.browser_check.setToolTip("执行页面 JavaScript，应对 PiaStudy 反爬；首次使用前请下载 Chromium")
+        self.browser_download_btn = QPushButton("下载无头浏览器")
+        self.browser_download_btn.setObjectName("CompactButton")
+        self.browser_download_btn.setToolTip("仅在用户目录下载 Chromium，约数百 MB")
+        self.browser_download_btn.clicked.connect(self.download_browser)
+        browser_row.addWidget(self.browser_check)
+        browser_row.addStretch()
+        browser_row.addWidget(self.browser_download_btn)
+        layout.addLayout(browser_row)
+        self._refresh_browser_status()
+
+        self.hands_combo = QComboBox()
+        self.hands_combo.addItem("纯旋律", True)
+        self.hands_combo.addItem("双手版", False)
+        self.hands_combo.setToolTip("转换可能与原曲有差异，可尝试同曲其他版本。")
+        layout.addWidget(self.hands_combo)
 
         self.results_list = QListWidget()
         self.results_list.itemDoubleClicked.connect(lambda _: self.convert_selected())
@@ -770,17 +1216,14 @@ class PiastudySearchDialog(QDialog):
         self.convert_btn = QPushButton("转换到曲库")
         self.convert_btn.clicked.connect(self.convert_selected)
         self.convert_btn.setEnabled(False)
-        self.request_btn = QPushButton("提交扒谱请求")
+        self.request_btn = QPushButton("求谱")
         self.request_btn.setObjectName("CompactButton")
         self.request_btn.setToolTip("结果较少时，可提交给项目维护者处理")
         self.request_btn.clicked.connect(self.request_sheet)
         self.request_btn.hide()
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.reject)
         buttons.addStretch()
         buttons.addWidget(self.request_btn)
         buttons.addWidget(self.convert_btn)
-        buttons.addWidget(close_btn)
         layout.addLayout(buttons)
 
         if query:
@@ -824,19 +1267,17 @@ class PiastudySearchDialog(QDialog):
             list_item.setData(Qt.UserRole, item)
             self.results_list.addItem(list_item)
         if results:
-            message = f"找到 {len(results)} 个结果，双击可直接转换。"
-            if len(results) < 10:
-                message += " 结果较少，可提交扒谱请求。"
+            message = f"{len(results)} 个结果"
             self.status_label.setText(message)
             self.results_list.setCurrentRow(0)
             self.convert_btn.setEnabled(True)
         else:
-            self.status_label.setText("没有找到，建议提交扒谱请求，或换个关键词试试。")
+            self.status_label.setText("未找到曲谱")
 
     def request_sheet(self):
         query = self.search_box.text().strip()
-        if query and self.parent() and hasattr(self.parent(), "open_sheet_request"):
-            self.parent().open_sheet_request(query)
+        if query:
+            self.host.open_sheet_request(query)
 
     def convert_selected(self):
         if self._thread and self._thread.is_alive():
@@ -846,31 +1287,96 @@ class PiastudySearchDialog(QDialog):
             return
         info = item.data(Qt.UserRole)
         melody = bool(self.hands_combo.currentData())
-        self.status_label.setText("正在下载并转换…")
-        self.convert_btn.setEnabled(False)
+        self._start_convert(info["page_url"], melody)
+
+    def import_from_url(self):
+        """直接抓取用户粘贴的 PiaStudy 歌曲详情页链接。"""
+        if self._thread and self._thread.is_alive():
+            return
+        page_url = self.url_box.text().strip()
+        if not page_url:
+            self.status_label.setText("请先粘贴 PiaStudy 歌曲详情页链接")
+            self.url_box.setFocus()
+            return
+        self._start_convert(page_url, bool(self.hands_combo.currentData()))
+
+    def _refresh_browser_status(self):
+        status = piastudy.browser_status()
+        self.browser_check.setEnabled(bool(status.get("installed")))
+        self.browser_download_btn.setEnabled(bool(status.get("available")))
+        if status.get("installed"):
+            self.browser_download_btn.setText("无头浏览器已下载")
+            self.browser_download_btn.setToolTip(status.get("path", ""))
+        elif status.get("available"):
+            self.browser_download_btn.setText("下载无头浏览器")
+        else:
+            self.browser_download_btn.setText("无头浏览器不可用")
+            self.browser_download_btn.setToolTip(status.get("error", "当前版本没有包含无头浏览器组件"))
+
+    def download_browser(self):
+        if self._thread and self._thread.is_alive():
+            return
+        if not piastudy.browser_status().get("available"):
+            self.status_label.setText("当前版本没有包含无头浏览器组件")
+            return
+        self.browser_download_btn.setEnabled(False)
+        self.url_btn.setEnabled(False)
         self.search_btn.setEnabled(False)
+        self.status_label.setText("正在下载 Chromium…")
+        self._thread = threading.Thread(target=self._browser_download_worker, daemon=True)
+        self._thread.start()
+
+    def _browser_download_worker(self):
+        try:
+            piastudy.install_browser(progress=self.signals.browser_progress.emit)
+            self.signals.browser_done.emit(True, "")
+        except Exception as exc:
+            self.signals.browser_done.emit(False, str(exc))
+
+    def _on_browser_progress(self, text):
+        self.status_label.setText(f"正在下载 Chromium：{text}")
+
+    def _on_browser_done(self, success, error):
+        self.search_btn.setEnabled(True)
+        self.url_btn.setEnabled(True)
+        self._refresh_browser_status()
+        if success:
+            self.status_label.setText("无头浏览器已下载，可以勾选后扒谱")
+        else:
+            self.status_label.setText(f"无头浏览器下载失败：{error}")
+
+    def _start_convert(self, page_url, melody):
+        self.status_label.setText("正在抓取并转换…")
+        self.convert_btn.setEnabled(False)
+        self.url_btn.setEnabled(False)
+        self.search_btn.setEnabled(False)
+        self.browser_download_btn.setEnabled(False)
+        use_browser = bool(self.browser_check.isChecked())
         self._thread = threading.Thread(
-            target=self._convert_worker, args=(info["page_url"], melody), daemon=True
+            target=self._convert_worker, args=(page_url, melody, use_browser), daemon=True
         )
         self._thread.start()
 
-    def _convert_worker(self, page_url, melody):
+    def _convert_worker(self, page_url, melody, use_browser=False):
         try:
-            result = piastudy.install_from_page(page_url, SHEET_MUSIC_DIR, melody=melody)
+            result = piastudy.install_from_page(
+                page_url, SHEET_MUSIC_DIR, melody=melody, use_browser=use_browser,
+            )
             self.signals.convert_done.emit(result, "")
         except Exception as exc:
             self.signals.convert_done.emit({}, str(exc))
 
     def _on_convert_done(self, result, error):
         self.search_btn.setEnabled(True)
+        self.url_btn.setEnabled(True)
+        self._refresh_browser_status()
         if error:
             self.status_label.setText(f"转换失败：{error}")
-            self.convert_btn.setEnabled(True)
+            self.convert_btn.setEnabled(bool(self.results_list.currentItem()))
             return
-        self.status_label.setText(f"已添加：{result.get('song_name')}（{result.get('count')} 首曲库）")
-        if self.parent() and hasattr(self.parent(), "refresh_files"):
-            self.parent().refresh_files()
-        self.accept()
+        self.status_label.setText(f"已添加：{result.get('song_name')}")
+        self.host.refresh_files()
+        self.convert_btn.setEnabled(bool(self.results_list.currentItem()))
 
 
 class MainWindow(QMainWindow):
@@ -896,6 +1402,7 @@ class MainWindow(QMainWindow):
         self.display_files = []
         self.selected_file = None
         self.meta = {}
+        self.current_score_notes = []
         self.notes_by_time = defaultdict(list)
         self.sorted_times = []
         self.bpm = 120
@@ -905,18 +1412,41 @@ class MainWindow(QMainWindow):
         self.seek_request_index = None
         self.global_hotkey_handles = []
         self.previewing = False
+        self._mobile_note_keys = []
         self.preview_cache = {}
         self.preview_dir = Path(tempfile.gettempdir()) / "sky_auto_music_qt_preview"
         self.preview_dir.mkdir(exist_ok=True)
+        self.sky_sound_root = APP_DIR / "Sky Sounds"
+        self.sky_sound_id = str(self.config.get("sky_sound_id") or "specy:Harp")
+        self.sky_location = str(self.config.get("sky_location") or "遇境")
+        saved_location_pitches = self.config.get("sky_location_pitches")
+        self.sky_location_pitches = dict(saved_location_pitches) if isinstance(saved_location_pitches, dict) else {}
+        self.sky_pitch = "C"
+        self.sky_sound_files = {}
+        self.sky_sound_players = {}
+        self.sky_sound_effects = {}
+        self.sky_sound_downloading = False
         self.pressed_keys = set()
         self.signals = PlayerSignals()
         self.signals.progress.connect(self.on_worker_progress)
         self.signals.finished.connect(self.on_worker_finished)
         self.signals.status.connect(self.set_status)
-        self.signals.start_requested.connect(self.start_play)
+        self.signals.start_requested.connect(self.start_from_shortcut)
         self.signals.play_stop_requested.connect(self.stop_play)
         self.signals.stop_requested.connect(self.force_stop)
         self.signals.toggle_overlay_requested.connect(self.toggle_overlay)
+        self.signals.mobile_action.connect(self.handle_mobile_action, Qt.QueuedConnection)
+        self.signals.preview_requested.connect(self._play_preview_note, Qt.QueuedConnection)
+        self.sky_sound_signals = SkySoundSignals()
+        self.sky_sound_signals.progress.connect(self.on_sky_sound_progress)
+        self.sky_sound_signals.finished.connect(self.on_sky_sound_finished)
+        self.sky_sound_signals.failed.connect(self.on_sky_sound_failed)
+        mobile_token = str(self.config.get("mobile_remote_token") or create_pairing_token())
+        self.mobile_remote = MobileRemoteServer(
+            APP_DIR / "mobile" / "web",
+            token=mobile_token,
+            on_action=self.request_mobile_action,
+        )
         self.update_signals = UpdateSignals()
         self.update_signals.progress.connect(self.on_update_progress)
         self.update_signals.finished.connect(self.on_update_finished)
@@ -929,6 +1459,7 @@ class MainWindow(QMainWindow):
         self.search_index = SheetSearchIndex(SHEET_MUSIC_DIR, APP_DIR / "search-index.json", self)
         self.search_index.ready_changed.connect(self.refresh_list, Qt.QueuedConnection)
         self.update_running = False
+        self.midi_game = None
 
         self.setWindowTitle("SkyAutoMusic")
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -936,6 +1467,10 @@ class MainWindow(QMainWindow):
         self.resize(int(self.config.get("width", 1080)), int(self.config.get("height", 720)))
         self.setMinimumSize(1000, 580)
         self.build_ui()
+        self.signals.score_step_requested.connect(self.overlay.step_score)
+        self.signals.overlay_lock_requested.connect(
+            lambda: self.overlay.set_input_locked(not self.overlay.lock_button.isChecked()))
+        self.signals.score_scroll_requested.connect(self.overlay.auto_score_button.click)
         self.apply_style()
         self.bind_escape_stop()
         self.refresh_files()
@@ -967,19 +1502,43 @@ class MainWindow(QMainWindow):
             self.global_hotkey_handles.append(
                 keyboard.add_hotkey("f3", self.signals.toggle_overlay_requested.emit, suppress=False)
             )
+            for key, callback in (
+                ("f4", self.signals.overlay_lock_requested.emit),
+                ("f5", lambda: self.signals.score_step_requested.emit(-1)),
+                ("f6", lambda: self.signals.score_step_requested.emit(1)),
+                ("f9", self.signals.score_scroll_requested.emit),
+            ):
+                self.global_hotkey_handles.append(keyboard.add_hotkey(key, callback, suppress=False))
             global_hotkeys_registered = True
         except Exception:
-            pass
+            for handle in self.global_hotkey_handles:
+                try:
+                    keyboard.remove_hotkey(handle)
+                except Exception:
+                    pass
+            self.global_hotkey_handles.clear()
+        self.global_hotkeys_registered = global_hotkeys_registered
         if not global_hotkeys_registered:
             self.overlay_shortcut = QShortcut(QKeySequence(Qt.Key_F3), self)
             self.overlay_shortcut.setContext(Qt.ApplicationShortcut)
             self.overlay_shortcut.activated.connect(self.toggle_overlay)
             self.start_shortcut = QShortcut(QKeySequence(Qt.Key_F7), self)
             self.start_shortcut.setContext(Qt.ApplicationShortcut)
-            self.start_shortcut.activated.connect(self.start_play)
+            self.start_shortcut.activated.connect(self.start_from_shortcut)
             self.stop_shortcut = QShortcut(QKeySequence(Qt.Key_F8), self)
             self.stop_shortcut.setContext(Qt.ApplicationShortcut)
             self.stop_shortcut.activated.connect(self.stop_play)
+            self.guide_shortcuts = []
+            for key, callback in (
+                (Qt.Key_F4, lambda: self.overlay.set_input_locked(False)),
+                (Qt.Key_F5, lambda: self.overlay.step_score(-1)),
+                (Qt.Key_F6, lambda: self.overlay.step_score(1)),
+                (Qt.Key_F9, self.overlay.auto_score_button.click),
+            ):
+                shortcut = QShortcut(QKeySequence(key), self)
+                shortcut.setContext(Qt.ApplicationShortcut)
+                shortcut.activated.connect(callback)
+                self.guide_shortcuts.append(shortcut)
 
     def build_ui(self):
         shell = QWidget()
@@ -1025,7 +1584,9 @@ class MainWindow(QMainWindow):
             return button
 
         self.nav_play = add_nav("播放", QStyle.SP_MediaPlay, True)
-        self.nav_library = add_nav("曲库", QStyle.SP_FileDialogListView)
+        self.nav_transcribe = add_nav("扒曲", QStyle.SP_FileDialogListView)
+        self.nav_compose = add_nav("制谱", QStyle.SP_FileDialogDetailedView)
+        self.nav_practice = add_nav("练习", QStyle.SP_MediaVolume)
         nav_layout.addSpacing(6)
         self.nav_update = add_nav("设置", QStyle.SP_ComputerIcon)
         self.nav_about = add_nav("关于", QStyle.SP_MessageBoxInformation)
@@ -1040,18 +1601,34 @@ class MainWindow(QMainWindow):
         self.pages.setObjectName("Pages")
         content_layout.addWidget(self.pages, 1)
         play_page = QWidget()
+        self.play_page = play_page
         play_page.setObjectName("PlayPage")
         help_page = QWidget()
+        self.help_page = help_page
         help_page.setObjectName("HelpPage")
         about_page = QWidget()
         about_page.setObjectName("AboutPage")
         self.pages.addWidget(play_page)
         self.pages.addWidget(help_page)
         self.pages.addWidget(about_page)
-        self.nav_play.clicked.connect(lambda: self.pages.setCurrentIndex(0))
-        self.nav_library.clicked.connect(lambda: (self.pages.setCurrentIndex(0), self.search.setFocus()))
-        self.nav_update.clicked.connect(lambda: self.pages.setCurrentIndex(1))
-        self.nav_about.clicked.connect(lambda: self.pages.setCurrentIndex(2))
+        self.nav_play.clicked.connect(lambda: self.pages.setCurrentWidget(play_page))
+        self.nav_update.clicked.connect(lambda: self.pages.setCurrentWidget(help_page))
+        self.nav_about.clicked.connect(lambda: self.pages.setCurrentWidget(about_page))
+        self.transcribe_page = QWidget()
+        self.transcribe_page.setObjectName("TranscribePage")
+        self.pages.addWidget(self.transcribe_page)
+        self.nav_transcribe.clicked.connect(self.show_transcribe)
+        self.score_editor = ScoreEditorPage(SHEET_MUSIC_DIR, self.preview_note, self.on_score_saved, self)
+        self.score_editor.input_mode.setCurrentIndex(max(0, self.score_editor.input_mode.findData(
+            self.config.get("score_input_mode", "piano"))))
+        self.pages.addWidget(self.score_editor)
+        self.nav_compose.clicked.connect(self.show_score_editor)
+        self.midi_practice = MidiPracticePage(self.config, self)
+        self.pages.addWidget(self.midi_practice)
+        self.midi_practice.starting.connect(self.stop_play)
+        self.midi_practice.score_selected.connect(self.select_practice_file)
+        self.midi_practice.progress_saved.connect(self.save_config)
+        self.nav_practice.clicked.connect(self.show_midi_practice)
 
         page_layout = QVBoxLayout(play_page)
         page_layout.setContentsMargins(0, 0, 0, 0)
@@ -1093,17 +1670,10 @@ class MainWindow(QMainWindow):
         nf_hint = QLabel("曲库中没找到")
         nf_hint.setObjectName("MutedText")
         nf_layout.addWidget(nf_hint)
-        self.piastudy_search_btn = QPushButton("去 piastudy 搜索")
+        self.piastudy_search_btn = QPushButton("去扒曲")
         self.piastudy_search_btn.setObjectName("CompactButton")
         self.piastudy_search_btn.clicked.connect(lambda: self.open_piastudy_search(self.search.text().strip()))
-        self.import_midi_btn = QPushButton("导入 MIDI")
-        self.import_midi_btn.setObjectName("CompactButton")
-        self.import_midi_btn.clicked.connect(self.choose_midi_import)
-        self.contact_qq_btn = QPushButton("联系作者 QQ")
-        self.contact_qq_btn.setObjectName("CompactButton")
-        self.contact_qq_btn.clicked.connect(self.contact_author_qq)
-        for button in (self.piastudy_search_btn, self.import_midi_btn, self.contact_qq_btn):
-            nf_layout.addWidget(button)
+        nf_layout.addWidget(self.piastudy_search_btn)
         self.not_found_panel.hide()
 
         self.list_widget = QListWidget()
@@ -1135,17 +1705,14 @@ class MainWindow(QMainWindow):
         info_layout.setContentsMargins(0, 0, 0, 6)
         info_layout.setSpacing(4)
         info_layout.setAlignment(Qt.AlignTop)
-        eyebrow = QLabel("正在播放")
+        eyebrow = QLabel("播放")
         eyebrow.setObjectName("Eyebrow")
-        current_caption = QLabel("当前曲目")
-        current_caption.setObjectName("CurrentCaption")
         self.name_label = QLabel("请选择一首乐谱")
         self.name_label.setObjectName("SongTitle")
         self.name_label.setWordWrap(True)
-        self.song_summary_label = QLabel("从左侧曲库选择后即可开始")
+        self.song_summary_label = QLabel("—")
         self.song_summary_label.setObjectName("MutedText")
         info_layout.addWidget(eyebrow)
-        info_layout.addWidget(current_caption)
         info_layout.addWidget(self.name_label)
 
         info_grid = QGridLayout()
@@ -1158,8 +1725,8 @@ class MainWindow(QMainWindow):
         self.filename_label.setObjectName("Filename")
         self.filename_label.setWordWrap(True)
         for row, (label, widget) in enumerate([
-            ("演奏音符数", self.song_summary_label),
-            ("演奏时长", self.duration_summary_label),
+            ("音符", self.song_summary_label),
+            ("时长", self.duration_summary_label),
             ("作者", self.author_label), ("制谱", self.transcribed_label),
             ("文件", self.filename_label),
         ]):
@@ -1170,6 +1737,42 @@ class MainWindow(QMainWindow):
         info_grid.setColumnStretch(1, 1)
         info_layout.addLayout(info_grid)
         right.addWidget(info, 0)
+
+        sound_section = QFrame()
+        sound_section.setObjectName("PlaybackSoundSection")
+        sound_layout = QVBoxLayout(sound_section)
+        sound_layout.setContentsMargins(0, 5, 0, 7)
+        sound_layout.setSpacing(5)
+        instrument_row = QHBoxLayout()
+        instrument_row.setSpacing(7)
+        instrument_row.addWidget(QLabel("音色"))
+        self.play_sound_combo = QComboBox()
+        self.play_sound_combo.setAccessibleName("播放预览音色")
+        self.play_sound_combo.setIconSize(QSize(22, 22))
+        self.play_sound_combo.setToolTip("选择播放页预览和制谱试听使用的乐器")
+        instrument_row.addWidget(self.play_sound_combo, 1)
+        self.play_sound_download_button = QToolButton()
+        self.play_sound_download_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
+        self.play_sound_download_button.setFixedSize(32, 32)
+        self.play_sound_download_button.setToolTip("下载所选音色")
+        self.play_sound_download_button.setAccessibleName("下载所选音色")
+        instrument_row.addWidget(self.play_sound_download_button)
+        sound_layout.addLayout(instrument_row)
+        location_row = QHBoxLayout()
+        location_row.setSpacing(7)
+        location_row.addWidget(QLabel("演奏地点"))
+        self.play_location_combo = QComboBox()
+        self.play_location_combo.setAccessibleName("演奏地点")
+        self.play_location_combo.setToolTip("选择游戏中的具体地点，为本机试听匹配调性")
+        location_row.addWidget(self.play_location_combo, 1)
+        location_row.addWidget(QLabel("调性"))
+        self.play_pitch_combo = QComboBox()
+        self.play_pitch_combo.setAccessibleName("演奏调性")
+        self.play_pitch_combo.setToolTip("当前地点的试听调性；手动修改会记住该地点的选择")
+        self.play_pitch_combo.setFixedWidth(78)
+        location_row.addWidget(self.play_pitch_combo)
+        sound_layout.addLayout(location_row)
+        right.addWidget(sound_section)
 
         time_box = QFrame()
         time_box.setObjectName("ProgressSection")
@@ -1332,19 +1935,6 @@ class MainWindow(QMainWindow):
             shortcut_row.addWidget(key)
             inspector_layout.addLayout(shortcut_row)
 
-        hint = QFrame()
-        hint.setObjectName("HintBox")
-        hint_layout = QVBoxLayout(hint)
-        hint_layout.setContentsMargins(11, 9, 11, 9)
-        hint_layout.setSpacing(5)
-        hint_title = QLabel("提示")
-        hint_title.setObjectName("CardTitle")
-        hint_copy = QLabel("F7 开始演奏，F8 停止演奏；ESC 可强制停止并释放所有按键。")
-        hint_copy.setObjectName("MutedText")
-        hint_copy.setWordWrap(True)
-        hint_layout.addWidget(hint_title)
-        hint_layout.addWidget(hint_copy)
-        inspector_layout.addWidget(hint)
         inspector_layout.addStretch()
         splitter.addWidget(inspector)
         splitter.setStretchFactor(0, 0)
@@ -1385,6 +1975,7 @@ class MainWindow(QMainWindow):
         help_page_layout = QVBoxLayout(help_page)
         help_page_layout.setContentsMargins(0, 0, 0, 0)
         help_scroll = QScrollArea()
+        self.help_scroll = help_scroll
         help_scroll.setObjectName("HelpScroll")
         help_scroll.setWidgetResizable(True)
         help_scroll.setFrameShape(QFrame.NoFrame)
@@ -1396,11 +1987,8 @@ class MainWindow(QMainWindow):
         help_layout.setSpacing(16)
         help_scroll.setWidget(help_content)
         help_page_layout.addWidget(help_scroll)
-        help_title = QLabel("设置与说明")
+        help_title = QLabel("设置")
         help_title.setObjectName("BrandTitle")
-        help_intro = QLabel("从曲库选择乐谱，调整速度与演奏效果，然后点击“开始演奏”。")
-        help_intro.setObjectName("MutedText")
-        help_intro.setWordWrap(True)
         theme_card = QFrame()
         theme_card.setObjectName("Card")
         theme_layout = QVBoxLayout(theme_card)
@@ -1408,8 +1996,6 @@ class MainWindow(QMainWindow):
         theme_layout.setSpacing(10)
         theme_title = QLabel("外观主题")
         theme_title.setObjectName("CardTitle")
-        theme_copy = QLabel("主题会同步应用到主窗口、设置页和悬浮窗。")
-        theme_copy.setObjectName("MutedText")
         self.theme_combo = QComboBox()
         self.theme_combo.setAccessibleName("外观主题")
         for key, theme in THEMES.items():
@@ -1417,10 +2003,8 @@ class MainWindow(QMainWindow):
         self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(self.theme_name)))
         self.theme_combo.currentIndexChanged.connect(self.on_theme_combo_changed)
         theme_layout.addWidget(theme_title)
-        theme_layout.addWidget(theme_copy)
         theme_layout.addWidget(self.theme_combo)
         help_layout.addWidget(help_title)
-        help_layout.addWidget(help_intro)
         help_layout.addWidget(theme_card)
 
         admin_card = QFrame()
@@ -1441,22 +2025,93 @@ class MainWindow(QMainWindow):
         admin_layout.addWidget(self.admin_mode_check)
         help_layout.addWidget(admin_card)
 
-        help_card = QFrame()
-        help_card.setObjectName("Card")
-        help_card_layout = QVBoxLayout(help_card)
-        help_card_layout.setContentsMargins(20, 18, 20, 18)
-        for text in (
-            "右键乐谱可收藏或取消收藏。",
-            "预览仅在本机试听，不向游戏发送按键。",
-            "主窗口与悬浮窗都可拖动进度跳转。",
-            "速度 1.00x 为原曲 BPM。",
-            "F3 开关悬浮窗。",
-            "ESC 立即停止并释放所有按键。",
-        ):
-            line = QLabel(text)
-            line.setWordWrap(True)
-            help_card_layout.addWidget(line)
-        help_layout.addWidget(help_card)
+        self.midi_game = MidiSkyPanel(self.send_game_key, self.config, help_page)
+        self.midi_game.starting.connect(self.stop_play)
+        help_layout.addWidget(self.midi_game)
+
+        sound_card = QFrame()
+        sound_card.setObjectName("Card")
+        sound_layout = QVBoxLayout(sound_card)
+        sound_layout.setContentsMargins(20, 18, 20, 18)
+        sound_layout.setSpacing(9)
+        sound_title = QLabel("光遇音色")
+        sound_title.setObjectName("CardTitle")
+        sound_copy = QLabel("内置光遇乐器音色，可在制谱和曲谱预览中直接使用；也可导入本地采样。")
+        sound_copy.setObjectName("MutedText")
+        sound_copy.setWordWrap(True)
+        sound_layout.addWidget(sound_title)
+        sound_layout.addWidget(sound_copy)
+        sound_controls = QHBoxLayout()
+        self.sky_sound_instrument_combo = QComboBox()
+        self.sky_sound_instrument_combo.setAccessibleName("光遇音色")
+        self.sky_sound_download_button = QPushButton("下载所选音色")
+        self.sky_sound_download_button.setObjectName("CompactButton")
+        self.sky_sound_import_button = QPushButton("选择本地采样目录")
+        self.sky_sound_import_button.setObjectName("CompactButton")
+        self.sky_sound_source_button = QPushButton("打开采样来源")
+        self.sky_sound_source_button.setObjectName("CompactButton")
+        sound_controls.addWidget(self.sky_sound_instrument_combo, 1)
+        sound_controls.addWidget(self.sky_sound_download_button)
+        sound_controls.addWidget(self.sky_sound_import_button)
+        sound_controls.addWidget(self.sky_sound_source_button)
+        sound_layout.addLayout(sound_controls)
+        self.sky_sound_status_label = QLabel("当前使用：合成音")
+        self.sky_sound_status_label.setObjectName("MutedText")
+        self.sky_sound_status_label.setWordWrap(True)
+        sound_layout.addWidget(self.sky_sound_status_label)
+        help_layout.addWidget(sound_card)
+
+        mobile_card = QFrame()
+        mobile_card.setObjectName("Card")
+        mobile_layout = QVBoxLayout(mobile_card)
+        mobile_layout.setContentsMargins(20, 18, 20, 18)
+        mobile_layout.setSpacing(9)
+        mobile_title = QLabel("手机同步")
+        mobile_title.setObjectName("CardTitle")
+        mobile_copy = QLabel(
+            "手机端可以独立播放；连接同一局域网后，可从这里同步曲库和当前曲谱。"
+        )
+        mobile_copy.setObjectName("MutedText")
+        mobile_copy.setWordWrap(True)
+        mobile_layout.addWidget(mobile_title)
+        mobile_layout.addWidget(mobile_copy)
+        mobile_url_row = QHBoxLayout()
+        mobile_url_label = QLabel("地址")
+        mobile_url_label.setObjectName("FieldLabel")
+        self.mobile_url_input = QLineEdit()
+        self.mobile_url_input.setReadOnly(True)
+        self.mobile_url_input.setAccessibleName("手机同步地址")
+        self.mobile_url_input.setPlaceholderText("启动后显示局域网地址")
+        mobile_url_row.addWidget(mobile_url_label)
+        mobile_url_row.addWidget(self.mobile_url_input, 1)
+        mobile_layout.addLayout(mobile_url_row)
+        mobile_token_row = QHBoxLayout()
+        mobile_token_label = QLabel("令牌")
+        mobile_token_label.setObjectName("FieldLabel")
+        self.mobile_token_input = QLineEdit(self.mobile_remote.token)
+        self.mobile_token_input.setReadOnly(True)
+        self.mobile_token_input.setAccessibleName("手机同步令牌")
+        mobile_copy_button = QPushButton("复制")
+        mobile_copy_button.setObjectName("CompactButton")
+        mobile_copy_button.setAccessibleName("复制手机同步令牌")
+        mobile_copy_button.clicked.connect(self.copy_mobile_token)
+        mobile_token_row.addWidget(mobile_token_label)
+        mobile_token_row.addWidget(self.mobile_token_input, 1)
+        mobile_token_row.addWidget(mobile_copy_button)
+        mobile_layout.addLayout(mobile_token_row)
+        mobile_action_row = QHBoxLayout()
+        self.mobile_status_label = QLabel("尚未启动")
+        self.mobile_status_label.setObjectName("MutedText")
+        self.mobile_status_label.setWordWrap(True)
+        self.mobile_toggle_button = QPushButton("启动手机同步")
+        self.mobile_toggle_button.setObjectName("CompactButton")
+        self.mobile_toggle_button.clicked.connect(self.toggle_mobile_remote)
+        mobile_action_row.addWidget(self.mobile_status_label, 1)
+        mobile_action_row.addWidget(self.mobile_toggle_button)
+        mobile_layout.addLayout(mobile_action_row)
+        help_layout.addWidget(mobile_card)
+
+        self.build_transcribe_page()
 
         update_card = QFrame()
         update_card.setObjectName("Card")
@@ -1474,16 +2129,6 @@ class MainWindow(QMainWindow):
         update_header.addStretch()
         update_header.addWidget(self.update_version_label)
         update_layout.addLayout(update_header)
-
-        update_copy = QLabel("从 GitHub Release 下载曲库，国内网络可用镜像。")
-        update_copy.setObjectName("MutedText")
-        update_copy.setWordWrap(True)
-        update_layout.addWidget(update_copy)
-
-        collision_hint = QLabel("同名 JSON 导入时会自动改名，不会中断。")
-        collision_hint.setObjectName("ImportHint")
-        collision_hint.setWordWrap(True)
-        update_layout.addWidget(collision_hint)
 
         update_controls = QHBoxLayout()
         self.update_mirror_combo = QComboBox()
@@ -1505,7 +2150,7 @@ class MainWindow(QMainWindow):
 
         external_title = QLabel("其他来源")
         external_title.setObjectName("CardTitle")
-        update_layout.addWidget(external_title)
+        self.transcribe_import_layout.addWidget(external_title)
         external_controls = QHBoxLayout()
         self.source_url_input = QLineEdit()
         self.source_url_input.setPlaceholderText("粘贴 .zip 或 .json 的 HTTP/HTTPS 直链")
@@ -1514,34 +2159,468 @@ class MainWindow(QMainWindow):
         self.source_download_button.clicked.connect(self.start_external_source_import)
         external_controls.addWidget(self.source_url_input, 1)
         external_controls.addWidget(self.source_download_button)
-        update_layout.addLayout(external_controls)
+        self.transcribe_import_layout.addLayout(external_controls)
 
         local_controls = QHBoxLayout()
-        local_copy = QLabel("也可拖入 JSON / ZIP，或导入 MIDI。")
-        local_copy.setObjectName("MutedText")
-        local_copy.setWordWrap(True)
-        self.import_files_button = QPushButton("选择本地文件")
+        self.import_files_button = QPushButton("导入 JSON / ZIP")
         self.import_files_button.clicked.connect(self.choose_sheet_files)
         self.import_midi_files_button = QPushButton("导入 MIDI")
         self.import_midi_files_button.clicked.connect(self.choose_midi_import)
-        local_controls.addWidget(local_copy, 1)
-        local_controls.addWidget(self.import_files_button)
         local_controls.addWidget(self.import_midi_files_button)
-        update_layout.addLayout(local_controls)
+        local_controls.addWidget(self.import_files_button)
+        self.transcribe_import_layout.insertLayout(0, local_controls)
+        self.transcribe_import_layout.addStretch()
 
         self.update_progress = QProgressBar()
         self.update_progress.setRange(0, 100)
         self.update_progress.setValue(0)
         self.update_progress.setTextVisible(False)
+        self.import_progress = QProgressBar()
+        self.import_progress.setRange(0, 100)
+        self.import_progress.setValue(0)
+        self.update_progress.valueChanged.connect(self.import_progress.setValue)
+        self.import_progress.setTextVisible(False)
+        self.import_status = QLabel("支持 MIDI、JSON、ZIP")
+        self.import_status.setObjectName("MutedText")
+        self.import_status.setWordWrap(True)
+        self.transcribe_import_layout.insertWidget(3, self.import_progress)
+        self.transcribe_import_layout.insertWidget(4, self.import_status)
         self.update_status_label = QLabel("尚未检查更新")
         self.update_status_label.setObjectName("MutedText")
         self.update_status_label.setWordWrap(True)
         update_layout.addWidget(self.update_progress)
         update_layout.addWidget(self.update_status_label)
-        help_layout.addWidget(update_card)
+        self.transcribe_update_layout.addWidget(update_card)
+        self.transcribe_update_layout.addStretch()
         help_layout.addStretch()
         self.build_about_page(about_page)
         self.overlay = FloatingControl(self)
+        self.midi_game.keys_changed.connect(self.overlay.feed_game_midi)
+        self.midi_game.connecting.connect(self.prepare_game_midi)
+        self.score_editor.midi_connecting.connect(lambda: self.release_midi_ownership("editor"))
+        self.midi_practice.connecting.connect(lambda: self.release_midi_ownership("practice"))
+        self.setup_sky_sound_controls()
+        self.setup_sky_location_controls()
+
+    def build_transcribe_page(self):
+        layout = QVBoxLayout(self.transcribe_page)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+        title = QLabel("扒曲")
+        title.setObjectName("BrandTitle")
+        layout.addWidget(title)
+        self.transcribe_tabs = QTabWidget()
+        layout.addWidget(self.transcribe_tabs, 1)
+        self.transcribe_search = PiastudySearchPanel(self)
+        self.transcribe_search.setObjectName("TranscribePanel")
+        self.transcribe_tabs.addTab(self.transcribe_search, "在线搜索")
+        for label, attribute in (("本地导入", "transcribe_import_layout"),
+                                 ("曲库更新", "transcribe_update_layout")):
+            page = QWidget()
+            page.setObjectName("TranscribePanel")
+            content = QVBoxLayout(page)
+            content.setContentsMargins(18, 18, 18, 18)
+            content.setSpacing(14)
+            setattr(self, attribute, content)
+            self.transcribe_tabs.addTab(page, label)
+        self.realtime_recognition = RealtimeRecognizerPage(self, SHEET_MUSIC_DIR)
+        self.realtime_recognition.setObjectName("TranscribePanel")
+        self.transcribe_tabs.addTab(self.realtime_recognition, "实时识曲")
+
+    def show_transcribe(self):
+        self.pages.setCurrentWidget(self.transcribe_page)
+        self.nav_transcribe.setChecked(True)
+
+    def show_score_editor(self):
+        if self.midi_practice.connected_device:
+            self.midi_practice.disconnect("已切换到制谱页")
+        self.pages.setCurrentWidget(self.score_editor)
+        self.nav_compose.setChecked(True)
+
+    def show_midi_practice(self):
+        if self.score_editor.connected_device:
+            self.score_editor.disconnect_midi("已切换到练习页")
+        self.pages.setCurrentWidget(self.midi_practice)
+
+    def show_game_midi(self):
+        self.pages.setCurrentWidget(self.help_page)
+        self.nav_update.setChecked(True)
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        QTimer.singleShot(0, lambda: self.help_scroll.ensureWidgetVisible(self.midi_game))
+
+    def release_midi_ownership(self, owner):
+        if owner != "game":
+            self.midi_game.disconnect("已切换到制谱或练习输入")
+        if owner != "editor":
+            self.score_editor.disconnect_midi("已切换 MIDI 输入用途")
+        if owner != "practice":
+            self.midi_practice.disconnect("已切换 MIDI 输入用途")
+
+    def prepare_game_midi(self):
+        self.stop_play()
+        self.release_midi_ownership("game")
+
+    def send_game_key(self, key, key_up):
+        return send_scan_key(key, key_up)
+
+    def setup_sky_sound_controls(self):
+        editor = self.score_editor
+        for combo in (editor.sound_combo, self.sky_sound_instrument_combo, self.play_sound_combo):
+            combo.setIconSize(QSize(22, 22))
+            combo.currentIndexChanged.connect(lambda _, source=combo: self.select_sky_sound(source.currentData()))
+        for button in (editor.sound_download_button, self.sky_sound_download_button, self.play_sound_download_button):
+            button.clicked.connect(self.download_selected_sky_sound)
+        for button in (editor.sound_import_button, self.sky_sound_import_button):
+            button.clicked.connect(self.import_sky_sound_folder)
+        for button in (editor.sound_source_button, self.sky_sound_source_button):
+            button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(SOURCE_URL)))
+        self.refresh_sky_sound_choices()
+
+    @staticmethod
+    def sky_instrument_icon(name):
+        custom = INSTRUMENT_CUSTOM_ICONS.get(name)
+        if custom:
+            path = ASSET_DIR / "instruments" / custom
+            return QIcon(str(path)) if path.is_file() else QIcon()
+        code = INSTRUMENT_ICON_CODES.get(name)
+        path = ASSET_DIR / "instruments" / f"{code}.png" if code else None
+        return QIcon(str(path)) if path and path.is_file() else QIcon()
+
+    def refresh_sky_sound_choices(self):
+        choices = [("合成音", "", QIcon())]
+        for name in SPECY_INSTRUMENTS:
+            choices.append((f"{INSTRUMENT_LABELS[name]} ({name})", f"specy:{name}", self.sky_instrument_icon(name)))
+        local_root = self.config.get("sky_sound_local_root")
+        if local_root:
+            for name, path in instrument_folders(local_root):
+                choices.append((f"{INSTRUMENT_LABELS.get(name, name)} · 本地", f"local:{path}", self.sky_instrument_icon(name)))
+        if self.sky_sound_id not in {value for _, value, _ in choices}:
+            self.sky_sound_id = ""
+        for combo in (self.score_editor.sound_combo, self.sky_sound_instrument_combo, self.play_sound_combo):
+            combo.blockSignals(True)
+            combo.clear()
+            for label, value, icon in choices:
+                combo.addItem(icon, label, value)
+            combo.setCurrentIndex(combo.findData(self.sky_sound_id))
+            combo.blockSignals(False)
+        self.select_sky_sound(self.sky_sound_id, save=False)
+
+    def select_sky_sound(self, sound_id, save=True):
+        sound_id = str(sound_id or "")
+        if sound_id != self.sky_sound_id:
+            self.stop_sky_sound_players()
+        self.sky_sound_id = sound_id
+        if sound_id.startswith("specy:"):
+            name = sound_id.partition(":")[2]
+            required_count = SAMPLE_COUNTS.get(name, 15)
+            downloaded = self.sky_sound_root / "Specy" / name
+            bundled = ASSET_DIR / "sky_sounds" / "Specy" / name
+            downloaded_files = sample_files(downloaded, required_count)
+            bundled_files = sample_files(bundled, required_count)
+            self.sky_sound_files = downloaded_files or bundled_files
+            label = INSTRUMENT_LABELS.get(name, name)
+        elif sound_id.startswith("local:"):
+            folder = Path(sound_id.partition(":")[2])
+            label = folder.name
+            self.sky_sound_files = sample_files(folder, SAMPLE_COUNTS.get(folder.name, 15))
+        else:
+            label = "合成音"
+            self.sky_sound_files = {}
+        if self.sky_sound_files:
+            status = f"当前使用：{label}"
+        elif sound_id.startswith("specy:"):
+            status = f"{label} 的内置采样缺失；试听暂用合成音。"
+        elif sound_id.startswith("local:"):
+            status = "本地采样目录无效；试听暂用合成音。"
+        else:
+            status = "当前使用：合成音"
+        for combo in (self.score_editor.sound_combo, self.sky_sound_instrument_combo, self.play_sound_combo):
+            index = combo.findData(sound_id)
+            if index >= 0 and combo.currentIndex() != index:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+        self.score_editor.sound_status.setText(status)
+        self.sky_sound_status_label.setText(status)
+        downloadable = sound_id.startswith("specy:") and not self.sky_sound_files
+        for button in (self.score_editor.sound_download_button, self.sky_sound_download_button):
+            button.setEnabled(downloadable and not self.sky_sound_downloading)
+            button.setHidden(not downloadable)
+        self.play_sound_download_button.setEnabled(downloadable and not self.sky_sound_downloading)
+        self.play_sound_download_button.setHidden(not downloadable)
+        self.play_sound_download_button.setToolTip("下载所选音色" if downloadable else status)
+        if save:
+            self.save_config()
+
+    def setup_sky_location_controls(self):
+        self.location_presets = {name: (pitch, condition) for name, pitch, condition in LOCATION_PRESETS}
+        self.location_presets["其他地点"] = ("C", "")
+        for name, (pitch, condition) in self.location_presets.items():
+            self.play_location_combo.addItem(name, name)
+            index = self.play_location_combo.count() - 1
+            tip = f"攻略参考调性：{pitch}"
+            if condition:
+                tip += f"；{condition}"
+            self.play_location_combo.setItemData(index, tip, Qt.ToolTipRole)
+        self.play_pitch_combo.addItems(PITCHES)
+        if self.sky_location not in self.location_presets:
+            self.sky_location = "遇境"
+        self.play_location_combo.setCurrentIndex(self.play_location_combo.findData(self.sky_location))
+        self.play_location_combo.currentIndexChanged.connect(self.on_sky_location_changed)
+        self.play_pitch_combo.currentTextChanged.connect(self.on_sky_pitch_changed)
+        self.on_sky_location_changed(save=False)
+
+    def on_sky_location_changed(self, _index=None, save=True):
+        location = self.play_location_combo.currentData() or "遇境"
+        self.sky_location = location
+        default_pitch, condition = self.location_presets[location]
+        pitch = self.sky_location_pitches.get(location, default_pitch)
+        if pitch not in PITCHES:
+            pitch = default_pitch
+        self.sky_pitch = pitch
+        self.play_pitch_combo.blockSignals(True)
+        self.play_pitch_combo.setCurrentText(pitch)
+        self.play_pitch_combo.blockSignals(False)
+        self.play_location_combo.setToolTip(
+            f"{location}：{pitch} 调" + (f"；{condition}" if condition else "")
+            + "。实际游戏调性仍以当前背景音乐为准。"
+        )
+        self.stop_sky_sound_players()
+        if save:
+            self.save_config()
+
+    def on_sky_pitch_changed(self, pitch):
+        if pitch not in PITCHES:
+            return
+        self.sky_pitch = pitch
+        self.sky_location_pitches[self.sky_location] = pitch
+        self.stop_sky_sound_players()
+        self.save_config()
+
+    def import_sky_sound_folder(self):
+        selected = QFileDialog.getExistingDirectory(self, "选择光遇音色采样目录")
+        if not selected:
+            return
+        folders = instrument_folders(selected)
+        if not folders:
+            QMessageBox.warning(self, "无法导入音色", "请选择包含连续编号采样的乐器目录，或其上一级目录。")
+            return
+        if len(folders) > 1:
+            names = [name for name, _ in folders]
+            name, accepted = QInputDialog.getItem(self, "选择乐器", "乐器", names, 0, False)
+            if not accepted:
+                return
+            folder = folders[names.index(name)][1]
+        else:
+            folder = folders[0][1]
+        self.config["sky_sound_local_root"] = selected
+        self.stop_sky_sound_players()
+        self.sky_sound_id = f"local:{folder}"
+        self.refresh_sky_sound_choices()
+        self.save_config()
+
+    def download_selected_sky_sound(self):
+        if self.sky_sound_downloading or not self.sky_sound_id.startswith("specy:"):
+            return
+        name = self.sky_sound_id.partition(":")[2]
+        self.sky_sound_downloading = True
+        self.sky_sound_download_name = name
+        self.select_sky_sound(self.sky_sound_id, save=False)
+        total = SAMPLE_COUNTS.get(name, 15)
+        self.score_editor.sound_status.setText(f"正在下载 {name}：0 / {total}")
+        self.sky_sound_status_label.setText(f"正在下载 {name}：0 / {total}")
+        self.play_sound_download_button.setToolTip(f"正在下载 {name}：0 / {total}")
+
+        def worker():
+            try:
+                folder = self.sky_sound_root / "Specy" / name
+                download_specy_instrument(name, folder, self.sky_sound_signals.progress.emit)
+                self.sky_sound_signals.finished.emit(name)
+            except Exception as exc:
+                self.sky_sound_signals.failed.emit(str(exc))
+
+        self.sky_sound_thread = threading.Thread(target=worker, daemon=True)
+        self.sky_sound_thread.start()
+
+    def on_sky_sound_progress(self, current, total):
+        if self.sky_sound_id != f"specy:{self.sky_sound_download_name}":
+            return
+        status = f"正在下载：{current} / {total}"
+        self.score_editor.sound_status.setText(status)
+        self.sky_sound_status_label.setText(status)
+        self.play_sound_download_button.setToolTip(status)
+
+    def on_sky_sound_finished(self, name):
+        self.sky_sound_downloading = False
+        self.refresh_sky_sound_choices()
+        self.set_status(f"光遇音色 {name} 已下载")
+
+    def on_sky_sound_failed(self, error):
+        self.sky_sound_downloading = False
+        self.select_sky_sound(self.sky_sound_id, save=False)
+        QMessageBox.warning(self, "音色下载失败", f"下载未完成：{error}\n可重试，或选择本地采样目录。")
+
+    def on_score_saved(self, filename):
+        self.refresh_files()
+        self.start_mobile_remote(silent=True)
+        self.publish_mobile_state(include_library=True)
+        self.select_file(filename)
+        self.set_status(f"已保存制谱：{filename}")
+
+    def select_practice_file(self, filename):
+        if not filename:
+            self.midi_practice.set_score("未选择曲谱", {})
+            return
+        try:
+            meta, notes = parse_music_file(filename)
+            grouped = defaultdict(list)
+            for note in notes:
+                try:
+                    grouped[int(note["time"])].append(note["key"])
+                except (KeyError, ValueError, TypeError):
+                    continue
+            title = clean_song_name(meta.get("songName") or meta.get("name")) or self.display_song_name(filename)
+            self.midi_practice.set_score(title, grouped)
+        except Exception as exc:
+            self.midi_practice.set_score("无法读取曲谱", {})
+            self.midi_practice.feedback.setText(str(exc))
+
+    def start_from_shortcut(self):
+        if self.pages.currentWidget() is self.midi_practice:
+            self.midi_practice.start_practice()
+        else:
+            self.start_play()
+
+    def request_mobile_action(self, action):
+        """Queue a phone command on the Qt thread; HTTP worker threads never touch widgets."""
+        if not isinstance(action, dict):
+            return False
+        self.signals.mobile_action.emit(dict(action))
+        return True
+
+    def handle_mobile_action(self, action):
+        name = action.get("action")
+        try:
+            if name == "select":
+                filename = str(action.get("filename") or action.get("file") or "")
+                if filename not in self.all_files:
+                    self.set_status("手机请求的曲谱不存在")
+                    return
+                self.select_file(filename, sync_list=True)
+            elif name == "start":
+                self.start_play()
+            elif name == "stop":
+                self.stop_play()
+            elif name == "preview":
+                self.toggle_preview()
+            elif name == "seek":
+                value = max(0, min(100, int(float(action.get("value", action.get("percent", 0))))))
+                self.progress.setValue(value)
+                self.seek_from_slider()
+            elif name == "set_speed":
+                self.set_speed(max(0.25, min(2.0, float(action.get("value", 1.0)))))
+                self.save_config()
+            elif name == "set_delay":
+                self.delay_slider.setValue(max(0, min(50, int(float(action.get("value", 0))))))
+                self.save_config()
+            elif name == "set_wrong":
+                self.wrong_slider.setValue(max(0, min(30, int(float(action.get("value", 0))))))
+                self.save_config()
+            else:
+                self.set_status("手机请求的操作不受支持")
+                return
+            self.set_status(f"手机已请求：{name}")
+        except (TypeError, ValueError):
+            self.set_status("手机请求参数无效")
+
+    def copy_mobile_token(self):
+        QApplication.clipboard().setText(self.mobile_remote.token)
+        self.mobile_status_label.setText("令牌已复制")
+        QTimer.singleShot(1500, self.refresh_mobile_remote_ui)
+
+    def toggle_mobile_remote(self):
+        if self.mobile_remote.running:
+            self.stop_mobile_remote()
+        else:
+            self.start_mobile_remote()
+
+    def start_mobile_remote(self, silent=False):
+        try:
+            port = self.mobile_remote.start()
+        except OSError as exc:
+            if not silent:
+                QMessageBox.warning(self, "手机同步", f"无法启动手机同步服务：{exc}")
+            self.refresh_mobile_remote_ui()
+            return False
+        self.config["mobile_remote_token"] = self.mobile_remote.token
+        self.refresh_mobile_remote_ui()
+        if not silent:
+            urls = self.mobile_remote.pairing_urls()
+            address = urls[0] if urls else f"http://127.0.0.1:{port}/"
+            self.set_status(f"手机同步已启动：{address}")
+        return True
+
+    def stop_mobile_remote(self):
+        self.mobile_remote.stop()
+        self.refresh_mobile_remote_ui()
+        self.set_status("手机同步已停止")
+
+    def refresh_mobile_remote_ui(self):
+        if not hasattr(self, "mobile_status_label"):
+            return
+        if self.mobile_remote.running:
+            urls = self.mobile_remote.pairing_urls()
+            address = urls[0] if urls else f"http://127.0.0.1:{self.mobile_remote.bound_port}/"
+            self.mobile_url_input.setText(address)
+            self.mobile_status_label.setText("运行中；手机和电脑需连接同一 Wi-Fi")
+            self.mobile_toggle_button.setText("停止手机同步")
+        else:
+            self.mobile_url_input.clear()
+            self.mobile_status_label.setText("尚未启动")
+            self.mobile_toggle_button.setText("启动手机同步")
+
+    def publish_mobile_state(self, include_library=False, include_score=False):
+        """Publish a JSON-safe snapshot used by both the native app and web fallback."""
+        remote = getattr(self, "mobile_remote", None)
+        if remote is None:
+            return
+        snapshot = {
+            "app_version": APP_VERSION,
+            "status": self.status.text() if hasattr(self, "status") else "",
+            "selected_file": self.selected_file,
+            "song_title": self.name_label.text() if hasattr(self, "name_label") else "",
+            "progress": self.progress.value() if hasattr(self, "progress") else 0,
+            "elapsed": self.time_label.text().split(" / ", 1)[0] if hasattr(self, "time_label") else "0:00",
+            "duration": self.format_seconds(self.total_seconds()),
+            "playing": bool(self.player_thread and self.player_thread.is_alive() and not self.previewing),
+            "previewing": bool(self.previewing),
+            "speed": round(self.speed(), 3) if hasattr(self, "speed_slider") else 1.0,
+            "delay": self.delay_slider.value() if hasattr(self, "delay_slider") else 0,
+            "wrong": self.wrong_slider.value() if hasattr(self, "wrong_slider") else 0,
+            "current_keys": [NOTE_TO_KEY.get(key, "") for key in getattr(self, "_mobile_note_keys", [])],
+        }
+        if include_library:
+            snapshot["library"] = [
+                {
+                    "filename": filename,
+                    "title": self.display_song_name(filename),
+                    "favorite": filename in self.favorites,
+                }
+                for filename in self.all_files
+            ]
+        if include_score:
+            snapshot["score"] = {
+                "filename": self.selected_file,
+                "title": snapshot["song_title"],
+                "bpm": self.bpm,
+                "notes": self.current_score_notes,
+            } if self.selected_file else None
+        try:
+            remote.set_state(snapshot)
+        except Exception:
+            pass
 
     def build_about_page(self, about_page):
         page_layout = QVBoxLayout(about_page)
@@ -1606,7 +2685,7 @@ class MainWindow(QMainWindow):
         request_layout.setSpacing(6)
         request_title = QLabel("扒谱请求")
         request_title.setObjectName("CardTitle")
-        request_copy = QLabel("搜不到的歌，可去 PiaStudy 搜索、导入 MIDI，或加入 QQ 群交流和求谱。")
+        request_copy = QLabel("交流与求谱")
         request_copy.setObjectName("MutedText")
         request_copy.setWordWrap(True)
         qq_row = QHBoxLayout()
@@ -1823,7 +2902,7 @@ class MainWindow(QMainWindow):
             QMainWindow { background: #090C12; }
             QWidget { color: #F5F7FB; font-family: "Microsoft YaHei UI", "Microsoft YaHei"; font-size: 14px; }
             #AppShell { background: #090C12; border: 1px solid #2B3445; border-radius: 6px; }
-            #AppContent, #Pages, #PlayPage, #HelpPage, #HelpScroll, #HelpContent, #AboutPage, #AboutScroll, #AboutContent { background: #090C12; border: 0; }
+            #AppContent, #Pages, #PlayPage, #HelpPage, #HelpScroll, #HelpContent, #AboutPage, #AboutScroll, #AboutContent, #PracticePage, #PracticeScroll, #PracticeContent, #TranscribePage, #TranscribePanel, #ScoreEditorPage, #ScoreEditorBody, #ScoreEditorScroll { background: #090C12; border: 0; }
             #WindowTitleBar { background: #0C1118; border-bottom: 1px solid #2B3445; }
             #TitleBarBrand { color: #F5F7FB; font-size: 15px; font-weight: 700; }
             #WindowTitleBar QToolButton { background: transparent; border: 0; border-radius: 3px; }
@@ -1847,6 +2926,14 @@ class MainWindow(QMainWindow):
             #CountBadge, #ValueBadge, #KeyCap { background: #151C27; color: #DCE4F2; border: 1px solid #2B3445; border-radius: 3px; padding: 4px 9px; font-weight: 650; }
             #KeyCap { min-width: 34px; padding: 6px 8px; }
             #Card { background: #111722; border: 1px solid #2B3445; border-radius: 6px; }
+            #ScoreEditorPage QTableWidget { background: #0C1118; color: #DCE4F2; border: 1px solid #2B3445; border-radius: 4px; gridline-color: #252E3C; }
+            #ScoreEditorPage QHeaderView::section { background: #151C27; color: #98A3B4; border: 0; border-bottom: 1px solid #2B3445; padding: 7px; font-weight: 650; }
+            QPushButton#SkyNoteButton { background: #24343B; color: #F3F2E8; border: 2px solid #7F989B; border-radius: 32px; padding: 4px; font-size: 12px; font-weight: 700; }
+            QPushButton#SkyNoteButton:hover { background: #35535B; border-color: #B7D5D3; }
+            QPushButton#SkyNoteButton:checked, QPushButton#SkyNoteButton:pressed { background: #9B784C; color: #FFFFFF; border-color: #F0D4A1; }
+            QTabWidget::pane { border: 1px solid #2B3445; border-radius: 4px; }
+            QTabBar::tab { background: #0C1118; color: #98A3B4; padding: 10px 22px; }
+            QTabBar::tab:selected { background: #151C27; color: #F5F7FB; border-bottom: 2px solid #5B86FF; }
             #NowPlayingSection { border: 0; }
             #ProgressSection { border-top: 1px solid #2B3445; border-bottom: 1px solid #2B3445; }
             #SettingsSection { border: 0; }
@@ -1861,7 +2948,8 @@ class MainWindow(QMainWindow):
             #Filename { color: #B5BECC; }
             #ValueLabel { color: #C7CFDC; font-weight: 650; }
             QSplitter::handle { background: transparent; width: 1px; }
-            QLineEdit, QComboBox { background: #0C1118; border: 1px solid #2B3445; border-radius: 4px; padding: 7px 9px; selection-background-color: #5B86FF; min-height: 17px; }
+            QLineEdit, QComboBox, QSpinBox { background: #0C1118; border: 1px solid #2B3445; border-radius: 4px; padding: 7px 9px; selection-background-color: #5B86FF; min-height: 17px; }
+            QTextBrowser { background: #111722; color: #F5F7FB; border: 1px solid #2B3445; padding: 12px; }
             QLineEdit:hover, QComboBox:hover { border-color: #3D485C; }
             QLineEdit:focus, QComboBox:focus { border-color: #776BFF; }
             QComboBox::drop-down { border: 0; width: 25px; }
@@ -1942,12 +3030,14 @@ class MainWindow(QMainWindow):
         self.refresh_nav_icons()
         if hasattr(self, "overlay"):
             self.overlay.setStyleSheet(self.styleSheet())
+            self.overlay.score_view.set_theme(THEMES[self.theme_name]["replacements"])
 
     def refresh_files(self):
         self.all_files = sorted([p.name for p in SHEET_MUSIC_DIR.glob("*.json")], key=str.lower)
         self.refresh_list()
         if self.all_files and not self.selected_file:
             self.select_file(self.all_files[0], sync_list=True)
+        self.publish_mobile_state(include_library=True)
 
     def refresh_files_if_changed(self):
         files = sorted([p.name for p in SHEET_MUSIC_DIR.glob("*.json")], key=str.lower)
@@ -1961,6 +3051,7 @@ class MainWindow(QMainWindow):
                 self.select_file(self.all_files[0], sync_list=True)
             if self.overlay.isVisible():
                 self.overlay.refresh()
+            self.publish_mobile_state(include_library=True)
 
     @staticmethod
     def display_song_name(filename):
@@ -1992,6 +3083,7 @@ class MainWindow(QMainWindow):
         return files
 
     def refresh_list(self):
+        self.midi_practice.set_library(self.all_files, self.display_song_name)
         current = self.selected_file
         self.display_files = self.filtered_files()
         if hasattr(self, "song_count_label"):
@@ -2017,7 +3109,7 @@ class MainWindow(QMainWindow):
         query = self.search.text().strip()
         self.not_found_panel.setVisible(bool(query and not self.display_files))
         if query and not self.display_files:
-            self.piastudy_search_btn.setText(f"去 piastudy 搜索「{query}」")
+            self.piastudy_search_btn.setToolTip(f"搜索：{query}")
         if hasattr(self, "overlay") and self.overlay.isVisible():
             self.overlay.refresh()
 
@@ -2075,13 +3167,14 @@ class MainWindow(QMainWindow):
 
     def clear_selected_song(self):
         self.stop_play()
+        self.overlay.set_score({})
         self.selected_file = None
         self.meta = {}
         self.notes_by_time = defaultdict(list)
         self.sorted_times = []
         self.bpm = 120
         self.name_label.setText("请选择一首乐谱")
-        self.song_summary_label.setText("从左侧曲库选择后即可开始")
+        self.song_summary_label.setText("—")
         for label in (self.author_label, self.transcribed_label, self.filename_label):
             label.setText("—")
         self.overlay.song_label.setText("请选择一首乐谱")
@@ -2107,12 +3200,19 @@ class MainWindow(QMainWindow):
     def select_file(self, filename, sync_list=True):
         if filename not in self.all_files:
             return
+        if filename != self.selected_file and (self.previewing or (self.player_thread and self.player_thread.is_alive())):
+            self.stop_play()
         self.selected_file = filename
         try:
             self.meta, notes = parse_music_file(filename)
         except Exception as exc:
             QMessageBox.critical(self, "错误", str(exc))
             return
+        self.current_score_notes = [
+            {"time": note.get("time"), "key": note.get("key")}
+            for note in notes
+            if isinstance(note, dict) and "time" in note and "key" in note
+        ]
         self.bpm = int(self.meta.get("bpm", 120) or 120)
         self.notes_by_time = defaultdict(list)
         for note in notes:
@@ -2121,6 +3221,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         self.sorted_times = sorted(self.notes_by_time.keys())
+        self.overlay.set_score(self.notes_by_time)
         raw_title = self.meta.get("songName") or self.meta.get("name") or self.display_song_name(filename)
         self.name_label.setText(clean_song_name(raw_title) or self.display_song_name(filename))
         self.author_label.setText(self.meta.get("author") or "未知作者")
@@ -2140,6 +3241,7 @@ class MainWindow(QMainWindow):
                     break
         if self.overlay.isVisible():
             self.overlay.refresh()
+        self.publish_mobile_state(include_score=True)
 
     def overlay_song_files(self):
         if self.overlay_mode == "收藏":
@@ -2147,8 +3249,15 @@ class MainWindow(QMainWindow):
         return list(self.all_files)
 
     def open_piastudy_search(self, query=""):
-        dialog = PiastudySearchDialog(self, query)
-        dialog.exec()
+        self.show_transcribe()
+        self.transcribe_tabs.setCurrentIndex(0)
+        query = (query or "").strip()
+        if query.lower().startswith(("https://piastudy.com/", "http://piastudy.com/", "https://www.piastudy.com/", "http://www.piastudy.com/")):
+            self.transcribe_search.url_box.setText(query)
+            self.transcribe_search.url_box.setFocus()
+        else:
+            self.transcribe_search.search_box.setText(query)
+            self.transcribe_search.search_box.setFocus()
 
     def choose_midi_import(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -2158,7 +3267,15 @@ class MainWindow(QMainWindow):
             self.start_midi_convert(Path(path))
 
     def start_midi_convert(self, midi_path):
-        self.set_status(f"正在导入 MIDI：{midi_path.name}…")
+        if self.update_running:
+            return
+        self.update_running = True
+        self.update_task_kind = "midi"
+        self.set_update_controls_enabled(False)
+        self.show_transcribe()
+        self.transcribe_tabs.setCurrentIndex(1)
+        self.set_task_progress_range(0, 0)
+        self.set_task_status(f"正在转换：{midi_path.name}")
         threading.Thread(
             target=self._midi_worker, args=(midi_path,), daemon=True
         ).start()
@@ -2171,15 +3288,17 @@ class MainWindow(QMainWindow):
             self.midi_signals.convert_done.emit({}, str(exc))
 
     def on_midi_convert_done(self, result, error):
+        self.update_running = False
+        self.set_update_controls_enabled(True)
+        self.set_task_progress_range(0, 100)
         if error:
             QMessageBox.warning(self, "MIDI 导入失败", str(error))
-            self.set_status("MIDI 导入失败")
+            self.update_progress.setValue(0)
+            self.set_task_status("MIDI 导入失败")
             return
         self.refresh_files()
-        filename = result.get("filename")
-        if filename:
-            self.select_file(filename, sync_list=True)
-        self.set_status(f"已导入：{result.get('song_name')}")
+        self.update_progress.setValue(100)
+        self.set_task_status(f"已导入：{result.get('song_name')}")
 
     def contact_author_qq(self):
         QApplication.clipboard().setText("2912173424")
@@ -2249,6 +3368,7 @@ class MainWindow(QMainWindow):
     def set_status(self, text):
         self.status.setText(text)
         self.overlay.status_label.setText(text)
+        self.publish_mobile_state()
 
     def speed(self):
         return max(0.25, self.speed_slider.value() / 100)
@@ -2261,10 +3381,12 @@ class MainWindow(QMainWindow):
         bpm_text = f" · {effective_bpm:g} BPM" if effective_bpm else ""
         self.speed_label.setText(f"{self.speed():.2f}x{bpm_text}")
         self.update_total_time()
+        self.publish_mobile_state()
 
     def update_effect_labels(self):
         self.delay_label.setText(f"{self.delay_slider.value()}%")
         self.wrong_label.setText(f"{self.wrong_slider.value()}%")
+        self.publish_mobile_state()
 
     def effective_factor(self):
         return 1.0 / self.speed()
@@ -2308,6 +3430,7 @@ class MainWindow(QMainWindow):
             self.time_label.setText(text)
             if hasattr(self, "overlay"):
                 self.overlay.time_label.setText(text)
+        self.publish_mobile_state()
 
     def progress_to_index(self, percent):
         if not self.sorted_times:
@@ -2344,6 +3467,8 @@ class MainWindow(QMainWindow):
         else:
             self.set_status(f"已定位到 {self.format_seconds(elapsed)}")
         self.set_progress(percent, elapsed)
+        self.overlay.stop_score_scroll()
+        self.overlay.follow_playback(self.sorted_times[idx])
 
     def apply_speed_preset(self, filename):
         try:
@@ -2390,6 +3515,9 @@ class MainWindow(QMainWindow):
             return
         if not self.confirm_admin_tip_before_play():
             return
+        self.midi_game.stop()
+        self.overlay.stop_score_scroll()
+        self.midi_practice.stop_practice()
         start_idx = self.progress_to_index(self.progress.value())
         self.stop_event.clear()
         with self.seek_lock:
@@ -2400,10 +3528,17 @@ class MainWindow(QMainWindow):
         self.player_thread.start()
 
     def stop_play(self):
+        self.midi_practice.stop_practice()
+        if self.midi_game:
+            self.midi_game.stop()
+        self.overlay.stop_score_scroll()
         self.stop_event.set()
+        if self.player_thread and self.player_thread.is_alive():
+            self.player_thread.join(timeout=0.2)
         with self.seek_lock:
             self.seek_request_index = None
         self.previewing = False
+        self.silence_preview_audio()
         try:
             import winsound
             winsound.PlaySound(None, 0)
@@ -2418,6 +3553,7 @@ class MainWindow(QMainWindow):
 
     def force_stop(self):
         self.stop_play()
+        self.realtime_recognition.stop_listening()
         self.set_progress(0, 0)
         self.overlay.keys_label.setText("当前按键：—")
         self.set_status("ESC 已停止")
@@ -2434,6 +3570,9 @@ class MainWindow(QMainWindow):
             return
         if not self.load_music():
             return
+        self.midi_game.stop()
+        self.overlay.stop_score_scroll()
+        self.midi_practice.stop_practice()
         self.previewing = True
         self.stop_event.clear()
         self.stop_btn.setEnabled(True)
@@ -2442,13 +3581,15 @@ class MainWindow(QMainWindow):
         start_idx = self.progress_to_index(self.progress.value())
         with self.seek_lock:
             self.seek_request_index = None
-        threading.Thread(target=self.play_loop, args=(start_idx, True), daemon=True).start()
+        self.player_thread = threading.Thread(target=self.play_loop, args=(start_idx, True), daemon=True)
+        self.player_thread.start()
 
     def stop_preview(self):
         self.stop_event.set()
         with self.seek_lock:
             self.seek_request_index = None
         self.previewing = False
+        self.silence_preview_audio()
         self.preview_btn.setText("预览")
         self.overlay.preview_btn.setText("预览")
         self.stop_btn.setEnabled(False)
@@ -2470,7 +3611,7 @@ class MainWindow(QMainWindow):
                     self.signals.finished.emit(True)
                     return
                 self.signals.status.emit(f"{remaining} 秒后开始，请切到目标窗口")
-                time.sleep(1)
+                self.stop_event.wait(1)
         idx = max(0, min(total - 1, start_idx))
         while idx < total and not self.stop_event.is_set():
             with self.seek_lock:
@@ -2512,10 +3653,14 @@ class MainWindow(QMainWindow):
         if self.stop_event.is_set():
             return
         self.set_progress(percent)
+        index = int(count_text.split("/", 1)[0]) - 1
+        if 0 <= index < len(self.sorted_times):
+            self.overlay.follow_playback(self.sorted_times[index])
         text = f"{elapsed} / {self.format_seconds(self.total_seconds())}"
         self.time_label.setText(text)
         self.overlay.time_label.setText(text)
         mapped = [NOTE_TO_KEY.get(k, "") for k in note_keys]
+        self._mobile_note_keys = list(note_keys)
         self.overlay.keys_label.setText("当前按键：" + ("  ".join(k for k in mapped if k) or "—"))
         self.set_status(("预览进度: " if self.previewing else "演奏进度: ") + count_text)
 
@@ -2527,6 +3672,8 @@ class MainWindow(QMainWindow):
         self.preview_btn.setText("预览")
         self.overlay.preview_btn.setText("预览")
         self.overlay.keys_label.setText("当前按键：—")
+        self._mobile_note_keys = []
+        self.publish_mobile_state()
         if not stopped:
             self.set_status("完成")
             self.set_progress(100, self.total_seconds())
@@ -2545,14 +3692,17 @@ class MainWindow(QMainWindow):
                 self.pressed_keys.discard(key)
 
     def release_all_keys(self):
-        for key in set(self.pressed_keys) | set(KEY_TO_SCANCODE):
+        keys = set(self.pressed_keys)
+        if not self.midi_game or not self.midi_game.router.enabled:
+            keys.update(KEY_TO_SCANCODE)
+        for key in keys:
             send_scan_key(key, True)
         self.pressed_keys.clear()
 
     def preview_note_frequency(self, note_key):
         try:
             idx = int(note_key.split("Key", 1)[1])
-            return 261.63 * (2 ** (SKY_MAJOR[idx] / 12))
+            return 261.63 * (2 ** ((SKY_MAJOR[idx] + pitch_semitones(self.sky_pitch)) / 12))
         except Exception:
             return None
 
@@ -2560,8 +3710,9 @@ class MainWindow(QMainWindow):
         keys = tuple(sorted(set(k for k in note_keys if self.preview_note_frequency(k))))
         if not keys:
             return None
-        if keys in self.preview_cache and self.preview_cache[keys].exists():
-            return self.preview_cache[keys]
+        cache_key = (self.sky_pitch, keys)
+        if cache_key in self.preview_cache and self.preview_cache[cache_key].exists():
+            return self.preview_cache[cache_key]
         sample_rate = 44100
         duration = 0.32
         attack = 0.012
@@ -2576,16 +3727,117 @@ class MainWindow(QMainWindow):
                     value += amp * math.sin(2 * math.pi * freq * mult * t)
             value = value / max(1, len(freqs)) * envelope * 0.42
             frames.append(struct.pack("<h", int(max(-1, min(1, value)) * 32767)))
-        path = self.preview_dir / ("preview_" + "_".join(k.replace("Key", "k") for k in keys) + ".wav")
+        path = self.preview_dir / ("preview_" + self.sky_pitch + "_" + "_".join(k.replace("Key", "k") for k in keys) + ".wav")
         with wave.open(str(path), "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(sample_rate)
             wav.writeframes(b"".join(frames))
-        self.preview_cache[keys] = path
+        self.preview_cache[cache_key] = path
         return path
 
     def preview_note(self, note_keys):
+        if QThread.currentThread() != self.thread():
+            self.signals.preview_requested.emit(list(note_keys))
+            return
+        self._play_preview_note(note_keys)
+
+    def stop_sky_sound_players(self):
+        for voices in self.sky_sound_players.values():
+            for player, output in voices:
+                player.stop()
+                player.deleteLater()
+                output.deleteLater()
+        self.sky_sound_players.clear()
+        for voices in self.sky_sound_effects.values():
+            for effect in voices:
+                effect.stop()
+                effect.deleteLater()
+        self.sky_sound_effects.clear()
+        self.stop_synth_preview_audio()
+
+    @staticmethod
+    def stop_synth_preview_audio():
+        try:
+            import winsound
+            winsound.PlaySound(None, 0)
+        except Exception:
+            pass
+
+    def silence_preview_audio(self):
+        for voices in self.sky_sound_players.values():
+            for player, _output in voices:
+                player.stop()
+        for voices in self.sky_sound_effects.values():
+            for effect in voices:
+                effect.stop()
+        self.stop_synth_preview_audio()
+
+    def play_sky_wave(self, index, path):
+        try:
+            source = pitched_wave(path, self.sky_pitch, self.preview_dir)
+        except (OSError, ValueError, wave.Error):
+            self.play_sky_media(index, path)
+            return
+        voices = self.sky_sound_effects.setdefault(index, [])
+        effect = next((voice for voice in voices if not voice.isPlaying()), None)
+        if effect is None and len(voices) < 4:
+            effect = QSoundEffect(self)
+            effect.setVolume(0.45)
+            effect.setSource(QUrl.fromLocalFile(str(source)))
+            voices.append(effect)
+        elif effect is None:
+            effect = voices.pop(0)
+            effect.stop()
+            voices.append(effect)
+        effect.play()
+
+    def play_sky_media(self, index, path):
+        voices = self.sky_sound_players.setdefault(index, [])
+        pair = next((voice for voice in voices if voice[0].playbackState() != QMediaPlayer.PlayingState), None)
+        if pair is None and len(voices) < 4:
+            output = QAudioOutput(self)
+            output.setVolume(0.34)
+            player = QMediaPlayer(self)
+            player.setAudioOutput(output)
+            player.setSource(QUrl.fromLocalFile(str(path)))
+            player.setPlaybackRate(2 ** (pitch_semitones(self.sky_pitch) / 12))
+            if hasattr(player, "setPitchCompensation"):
+                player.setPitchCompensation(False)
+            pair = (player, output)
+            voices.append(pair)
+        elif pair is None:
+            pair = voices.pop(0)
+            pair[0].stop()
+            voices.append(pair)
+        pair[0].setPosition(0)
+        pair[0].play()
+
+    def _play_preview_note(self, note_keys):
+        if not note_keys:
+            self.silence_preview_audio()
+            return
+        if self.sky_sound_files:
+            missing = []
+            for note_key in set(note_keys):
+                try:
+                    index = int(note_key.split("Key", 1)[1])
+                    path = self.sky_sound_files[index]
+                except KeyError:
+                    missing.append(note_key)
+                    continue
+                except (IndexError, TypeError, ValueError):
+                    continue
+                if path.suffix.lower() == ".wav":
+                    self.play_sky_wave(index, path)
+                else:
+                    self.play_sky_media(index, path)
+            if missing:
+                self.play_synth_preview(missing)
+            return
+        self.play_synth_preview(note_keys)
+
+    def play_synth_preview(self, note_keys):
         try:
             import winsound
             path = self.preview_wave_path(note_keys)
@@ -2636,6 +3888,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         event.acceptProposedAction()
+        self.show_transcribe()
+        self.transcribe_tabs.setCurrentIndex(1)
         self.start_manual_import(paths)
 
     def resizeEvent(self, event):
@@ -2691,8 +3945,8 @@ class MainWindow(QMainWindow):
         self.update_running = True
         self.update_task_kind = "official"
         self.set_update_controls_enabled(False)
-        self.update_progress.setRange(0, 0)
-        self.update_status_label.setText("正在获取曲库版本信息…")
+        self.set_task_progress_range(0, 0)
+        self.set_task_status("正在获取曲库版本信息…")
         mirror_prefix = self.update_mirror_combo.currentData() or ""
 
         def progress(percent, downloaded, total):
@@ -2713,6 +3967,14 @@ class MainWindow(QMainWindow):
 
         self.update_thread = threading.Thread(target=worker, daemon=True)
         self.update_thread.start()
+
+    def set_task_status(self, message):
+        self.update_status_label.setText(message)
+        self.import_status.setText(message)
+
+    def set_task_progress_range(self, minimum, maximum):
+        self.update_progress.setRange(minimum, maximum)
+        self.import_progress.setRange(minimum, maximum)
 
     def set_update_controls_enabled(self, enabled):
         for control_name in (
@@ -2738,8 +4000,8 @@ class MainWindow(QMainWindow):
         self.update_running = True
         self.update_task_kind = "external"
         self.set_update_controls_enabled(False)
-        self.update_progress.setRange(0, 0)
-        self.update_status_label.setText("正在从其他来源下载…")
+        self.set_task_progress_range(0, 0)
+        self.set_task_status("正在从其他来源下载…")
 
         def progress(percent, downloaded, total):
             if total:
@@ -2775,8 +4037,8 @@ class MainWindow(QMainWindow):
         self.update_running = True
         self.update_task_kind = "manual"
         self.set_update_controls_enabled(False)
-        self.update_progress.setRange(0, 0)
-        self.update_status_label.setText(f"正在导入 {len(paths)} 个文件…")
+        self.set_task_progress_range(0, 0)
+        self.set_task_status(f"正在导入 {len(paths)} 个文件…")
 
         def worker():
             try:
@@ -2790,14 +4052,14 @@ class MainWindow(QMainWindow):
 
     def on_update_progress(self, percent, message):
         if percent > 0:
-            self.update_progress.setRange(0, 100)
+            self.set_task_progress_range(0, 100)
             self.update_progress.setValue(percent)
-        self.update_status_label.setText(message)
+        self.set_task_status(message)
 
     def on_update_finished(self, result):
         self.update_running = False
         self.set_update_controls_enabled(True)
-        self.update_progress.setRange(0, 100)
+        self.set_task_progress_range(0, 100)
         self.update_progress.setValue(100)
         version = result.get("version", "未知")
         count = int(result.get("count", 0))
@@ -2812,17 +4074,17 @@ class MainWindow(QMainWindow):
                     message += f"，重名自动改名 {renamed} 首"
                 if skipped:
                     message += f"，跳过 {skipped} 个无效或重复文件"
-                self.update_status_label.setText(f"{message}；曲库共 {count} 首。")
+                self.set_task_status(f"{message}；曲库共 {count} 首。")
                 self.refresh_files()
             else:
-                self.update_status_label.setText(f"没有导入新曲谱；已跳过 {skipped} 个无效或重复文件。")
+                self.set_task_status(f"没有导入新曲谱；已跳过 {skipped} 个无效或重复文件。")
             return
         self.update_version_label.setText(f"当前：{version}")
         if result.get("updated"):
             changed = int(result.get("changed", count))
             removed = int(result.get("removed", 0))
             if result.get("mode") == "incremental":
-                self.update_status_label.setText(
+                self.set_task_status(
                     f"增量更新完成：新增或修改 {changed} 首，移除 {removed} 首；曲库共 {count} 首。"
                 )
             else:
@@ -2831,17 +4093,17 @@ class MainWindow(QMainWindow):
                     detail += f"；重名自动改名 {renamed} 首"
                 if skipped:
                     detail += f"；跳过无效文件 {skipped} 个"
-                self.update_status_label.setText(detail + "。")
+                self.set_task_status(detail + "。")
             self.refresh_files()
         else:
-            self.update_status_label.setText(f"已经是最新曲库，共 {count} 首曲谱。")
+            self.set_task_status(f"已经是最新曲库，共 {count} 首曲谱。")
 
     def on_update_failed(self, message):
         self.update_running = False
         self.set_update_controls_enabled(True)
-        self.update_progress.setRange(0, 100)
+        self.set_task_progress_range(0, 100)
         self.update_progress.setValue(0)
-        self.update_status_label.setText(f"处理失败：{message}")
+        self.set_task_status(f"处理失败：{message}")
         if getattr(self, "update_task_kind", "official") == "external":
             suggestion = "请检查下载地址是否为可直接访问的 ZIP 或 JSON 文件。"
         elif getattr(self, "update_task_kind", "official") == "manual":
@@ -2892,6 +4154,8 @@ class MainWindow(QMainWindow):
     def save_config(self):
         geo = self.geometry()
         data = dict(self.config)
+        data.update(self.midi_practice.settings())
+        data.update(self.midi_game.settings())
         data.update({
             "width": geo.width(),
             "height": geo.height(),
@@ -2905,6 +4169,11 @@ class MainWindow(QMainWindow):
             "overlay_music_mode": self.overlay_mode,
             "admin_mode": self.admin_mode,
             "admin_tip_count": self.admin_tip_count,
+            "sky_sound_id": self.sky_sound_id,
+            "score_input_mode": self.score_editor.input_mode.currentData(),
+            "sky_location": self.sky_location,
+            "sky_location_pitches": self.sky_location_pitches,
+            "mobile_remote_token": self.mobile_remote.token if hasattr(self, "mobile_remote") else self.config.get("mobile_remote_token"),
             "update_mirror": self.update_mirror_combo.currentData() if hasattr(self, "update_mirror_combo") else GITHUB_MIRRORS[0][1],
         })
         if self.theme_confirmed:
@@ -2912,11 +4181,20 @@ class MainWindow(QMainWindow):
         if self.overlay:
             og = self.overlay.geometry()
             data["progress_geometry"] = f"{og.width()}x{og.height()}+{og.x()}+{og.y()}"
+            data["overlay_show_score"] = self.overlay.score_button.isChecked()
+            data["overlay_opacity"] = self.overlay.opacity.currentData()
         write_json(CONFIG_FILE, data)
         self.config = data
 
     def closeEvent(self, event: QCloseEvent):
+        self.realtime_recognition.shutdown()
         self.stop_play()
+        self.stop_sky_sound_players()
+        self.score_editor.shutdown()
+        if hasattr(self, "mobile_remote"):
+            self.mobile_remote.stop()
+        self.midi_practice.shutdown()
+        self.midi_game.shutdown()
         if self.global_hotkey_handles:
             try:
                 import keyboard
@@ -2927,6 +4205,7 @@ class MainWindow(QMainWindow):
                 pass
         self.save_config()
         event.accept()
+        self.overlay.close()
 
 
 def configure_high_dpi():

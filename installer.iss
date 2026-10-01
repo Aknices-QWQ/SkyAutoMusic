@@ -1,5 +1,5 @@
 #define MyAppName "SkyAutoMusic"
-#define MyAppVersion "1.0.8"
+#define MyAppVersion "1.0.12"
 #ifndef Edition
   #define Edition "Lite"
 #endif
@@ -33,7 +33,7 @@ WizardStyle=modern
 SetupLogging=yes
 UninstallDisplayIcon={app}\SkyAutoMusic.exe
 LicenseFile=LICENSE
-VersionInfoVersion=1.0.8.0
+VersionInfoVersion=1.0.12.0
 VersionInfoCompany=Aknices && BA4KQS
 VersionInfoDescription=SkyAutoMusic {#Edition} Installer
 VersionInfoProductName=SkyAutoMusic
@@ -45,7 +45,9 @@ Name: "chinesesimp"; MessagesFile: "installer\ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "config.json,favorites.json"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "{#SourceDir}\favorites.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{autoprograms}\SkyAutoMusic"; Filename: "{app}\SkyAutoMusic.exe"

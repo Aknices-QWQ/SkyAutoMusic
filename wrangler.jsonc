@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sky-auto-music",
+  "compatibility_date": "2026-07-27",
+  "assets": {
+    "directory": "./site",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [
+    {
+      "pattern": "sky.xxlab.dev",
+      "custom_domain": true
+    }
+  ]
+}

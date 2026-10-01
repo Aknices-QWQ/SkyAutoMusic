@@ -1,0 +1,5 @@
+PySide6>=6.7,<7
+keyboard>=0.13.5,<1
+playwright>=1.50,<2
+numpy>=2.0,<3
+PyAudioWPatch>=0.2.12.8,<0.3; sys_platform == "win32"

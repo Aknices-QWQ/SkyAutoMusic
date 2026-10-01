@@ -1,0 +1,32 @@
+{
+  "app": {
+    "version": "1.0.3",
+    "released_at": "2026-07-28",
+    "repository": "https://github.com/Aknices-QWQ/SkyAutoMusic",
+    "lite": {
+      "name": "SkyAutoMusic-v1.0.3-Lite-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.3/SkyAutoMusic-v1.0.3-Lite-Setup.exe",
+      "size": 23131315,
+      "sha256": "136ecfc43f074ab5e61cf7aecfad06751b18fc7d6ed13ceb701df1f26159fcb9"
+    },
+    "full": {
+      "name": "SkyAutoMusic-v1.0.3-Full-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.3/SkyAutoMusic-v1.0.3-Full-Setup.exe",
+      "size": 60176359,
+      "sha256": "22098cf7131f66ce6415b7c272a89ba673447e1ef1c427635f4a90a1a12816f0"
+    }
+  },
+  "sheets": {
+    "version": "2026.07.27",
+    "count": 17700,
+    "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic-Sheets/releases/download/2026.07.27/SkyAutoMusic-Sheets-2026.07.27.zip",
+    "size": 65631659,
+    "sha256": "b7ab7e4e34a1e6e9000002f88564ad596be3ea49c29968f0984495c96def31f3",
+    "updates": []
+  },
+  "mirrors": [
+    { "name": "国内镜像 · ghfast.top", "prefix": "https://ghfast.top/" },
+    { "name": "备用镜像 · gh-proxy.com", "prefix": "https://gh-proxy.com/" },
+    { "name": "GitHub 直连", "prefix": "" }
+  ]
+}

@@ -1,0 +1,264 @@
+[
+  {
+    "title": [
+      "It's Not How Much; It's How"
+    ],
+    "DOI": "10.1177/0022429408328851",
+    "URL": "https://doi.org/10.1177/0022429408328851",
+    "author": [
+      {
+        "given": "Robert A.",
+        "family": "Duke",
+        "sequence": "first",
+        "affiliation": [
+          {
+            "name": "The University of Texas at Austin,"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Amy L.",
+        "family": "Simmons",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "The University of Texas at San Antonio"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Carla Davis",
+        "family": "Cash",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "Texas Tech University, Lubbock"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      }
+    ],
+    "published": {
+      "date-parts": [
+        [
+          2009,
+          1
+        ]
+      ]
+    },
+    "container-title": [
+      "Journal of Research in Music Education"
+    ],
+    "volume": "56",
+    "issue": "4",
+    "page": "310-321",
+    "abstract": "<jats:p>We observed 17 graduate and advanced-undergraduate piano majors practicing a difficult, three-measure keyboard passage from a Shostakovich concerto. Participants' instructions were to practice until they were confident they could play the passage accurately at a prescribed tempo in a retention test session the following day. We analyzed the practice behaviors of each pianist in terms of numeric and nonnumeric descriptors and ranked the pianists according to the overall performance quality of their retention tests. Results indicated no significant relationship between the rankings of pianists' retention test performances and any of the following variables: practice time, number of total practice trials, and number of complete practice trials. There were significant relationships between retention test rankings and the percentage of all performance trials that were performed correctly, r = —.51, the percentage of complete performance trials that were performed correctly, r = —.71, and the number of trials performed incorrectly during practice, r = .48. The results showed that the strategies employed during practice were more determinative of performance quality at retention than was how much or how long the pianists practiced, a finding consistent with the results of related research.</jats:p>",
+    "link": [
+      {
+        "URL": "https://journals.sagepub.com/doi/pdf/10.1177/0022429408328851",
+        "content-type": "application/pdf",
+        "content-version": "vor",
+        "intended-application": "text-mining"
+      },
+      {
+        "URL": "https://journals.sagepub.com/doi/pdf/10.1177/0022429408328851",
+        "content-type": "unspecified",
+        "content-version": "vor",
+        "intended-application": "similarity-checking"
+      }
+    ]
+  },
+  {
+    "title": [
+      "Distributed Practice and Procedural Memory Consolidation in Musicians’ Skill Learning"
+    ],
+    "DOI": "10.1177/0022429411424798",
+    "URL": "https://doi.org/10.1177/0022429411424798",
+    "author": [
+      {
+        "given": "Amy L.",
+        "family": "Simmons",
+        "sequence": "first",
+        "affiliation": [
+          {
+            "name": "Texas State University–San Marcos, San Marcos, TX, USA"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      }
+    ],
+    "published": {
+      "date-parts": [
+        [
+          2011,
+          11,
+          15
+        ]
+      ]
+    },
+    "container-title": [
+      "Journal of Research in Music Education"
+    ],
+    "volume": "59",
+    "issue": "4",
+    "page": "357-368",
+    "abstract": "<jats:p>This research was designed to determine whether musicians’ learning is affected by the time intervals interposed between practice sessions. Twenty-nine non-pianist musicians learned a 9-note sequence on a piano keyboard in three practice sessions that were separated by 5 min, 6 hr, or 24 hr. Significant improvements in performance accuracy were observed in Session 2 only in the group whose sessions were separated by 24 hr. There were significant increases in performance speed in Session 2 in all three practice conditions, results which likely were attributable to the inclusion of all Session 1 data in the analysis. Additional significant speed increases were observed in Session 3 only in the groups whose sessions were separated by 6 and 24 hr. These results suggest that sleep-based procedural memory consolidation may enhance performance accuracy in music skill learning, whereas enhancements in performance speed may be attributable to both wake- and sleep-based consolidation processes.</jats:p>",
+    "link": [
+      {
+        "URL": "https://journals.sagepub.com/doi/pdf/10.1177/0022429411424798",
+        "content-type": "application/pdf",
+        "content-version": "vor",
+        "intended-application": "text-mining"
+      },
+      {
+        "URL": "https://journals.sagepub.com/doi/full-xml/10.1177/0022429411424798",
+        "content-type": "application/xml",
+        "content-version": "vor",
+        "intended-application": "text-mining"
+      },
+      {
+        "URL": "https://journals.sagepub.com/doi/pdf/10.1177/0022429411424798",
+        "content-type": "unspecified",
+        "content-version": "vor",
+        "intended-application": "similarity-checking"
+      }
+    ]
+  },
+  {
+    "title": [
+      "Applying self-regulated learning microanalysis to study musicians’ practice"
+    ],
+    "DOI": "10.1177/0305735617731614",
+    "URL": "https://doi.org/10.1177/0305735617731614",
+    "author": [
+      {
+        "given": "Gary E.",
+        "family": "McPherson",
+        "sequence": "first",
+        "affiliation": [
+          {
+            "name": "University of Melbourne, Australia"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Margaret S.",
+        "family": "Osborne",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "University of Melbourne, Australia"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Paul",
+        "family": "Evans",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "University of New South Wales, Australia"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Peter",
+        "family": "Miksza",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "Indiana University, USA"
+          }
+        ],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      }
+    ],
+    "published": {
+      "date-parts": [
+        [
+          2017,
+          10,
+          26
+        ]
+      ]
+    },
+    "container-title": [
+      "Psychology of Music"
+    ],
+    "volume": "47",
+    "issue": "1",
+    "page": "18-32",
+    "abstract": "<jats:p>This article describes the development of a music practice microanalysis protocol that is based on the three-phase model of self-regulated learning (i.e., Forethought, Performance, and Self-Reflection). Up until now, most studies on music practice have tended to focus on behavioural aspects. The expanded view presented here outlines a technique for mapping the types of behaviours (actions), cognition (thoughts), and affect (feelings) that can help focus musicians’ practice. To explain the technique, we describe the practice of two first year Bachelor of Music students studying at a prominent university music school who are compared at three time points across one semester as they prepare an étude for a performance exam. These case studies demonstrate two broadly contrasting self-regulated learning profiles of how microanalysis can be used to cue students to think about what they are doing and then reflect critically on the strategies they can use to improve their playing. As a technique, microanalysis can inform educational interventions aimed at breaking the cycle of habits that typify musical practice by encouraging musicians to become more behaviourally, metacognitively, and motivationally involved in their own learning.</jats:p>",
+    "link": [
+      {
+        "URL": "https://journals.sagepub.com/doi/pdf/10.1177/0305735617731614",
+        "content-type": "application/pdf",
+        "content-version": "vor",
+        "intended-application": "text-mining"
+      },
+      {
+        "URL": "https://journals.sagepub.com/doi/full-xml/10.1177/0305735617731614",
+        "content-type": "application/xml",
+        "content-version": "vor",
+        "intended-application": "text-mining"
+      },
+      {
+        "URL": "https://journals.sagepub.com/doi/pdf/10.1177/0305735617731614",
+        "content-type": "application/pdf",
+        "content-version": "vor",
+        "intended-application": "syndication"
+      },
+      {
+        "URL": "https://journals.sagepub.com/doi/pdf/10.1177/0305735617731614",
+        "content-type": "unspecified",
+        "content-version": "vor",
+        "intended-application": "similarity-checking"
+      }
+    ]
+  }
+]

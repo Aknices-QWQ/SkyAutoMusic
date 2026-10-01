@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="carbon">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="SkyAutoMusic — 面向 Windows 的 Sky 光·遇自动演奏工具，支持悬浮控制、进度跳转、原曲 BPM 变速和在线曲库。">
+  <meta name="theme-color" content="#0a0b0c">
+  <title>SkyAutoMusic · 让每一次演奏更从容</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="SkyAutoMusic 首页">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <span>SkyAutoMusic</span>
+    </a>
+    <nav aria-label="主要导航">
+      <a href="#features">功能</a>
+      <a href="#download">下载</a>
+      <a href="#request">求谱</a>
+      <a href="https://github.com/Aknices-QWQ/SkyAutoMusic" target="_blank" rel="noreferrer">GitHub</a>
+    </nav>
+    <div class="theme-switcher" role="group" aria-label="网站主题">
+      <button type="button" data-theme-value="carbon" aria-label="中性黑灰主题" title="中性黑灰"></button>
+      <button type="button" data-theme-value="warm" aria-label="暖石墨主题" title="暖石墨"></button>
+      <button type="button" data-theme-value="editorial" aria-label="黑白浅色主题" title="黑白浅色"></button>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Windows · 开源 · 默认普通权限</p>
+        <h1 id="hero-title">把注意力留给音乐。</h1>
+        <p class="hero-lead">搜索曲库、试听键位、拖动进度。SkyAutoMusic 用克制的主窗口和小巧悬浮窗，让你在《Sky 光·遇》中轻松完成整场演奏。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#download">选择版本下载</a>
+          <a class="button button-secondary" href="#request">提交扒谱请求</a>
+          <a class="button button-secondary" href="https://github.com/Aknices-QWQ/SkyAutoMusic" target="_blank" rel="noreferrer">打开 GitHub ↗</a>
+        </div>
+        <dl class="hero-stats">
+          <div><dt id="sheet-count">17,700</dt><dd>首可用曲谱</dd></div>
+          <div><dt>1.00x</dt><dd>忠于原曲 BPM</dd></div>
+          <div><dt>F3</dt><dd>随时呼出悬浮窗</dd></div>
+        </dl>
+      </div>
+
+      <div class="app-preview" aria-label="SkyAutoMusic 界面预览">
+        <div class="preview-titlebar"><strong>SkyAutoMusic</strong><span>F3 悬浮窗　ESC 停止</span></div>
+        <div class="preview-body">
+          <aside>
+            <small>曲库</small>
+            <div class="preview-search">搜索歌名</div>
+            <ol>
+              <li class="active">Call of Silence</li>
+              <li>最后一吻</li>
+              <li>Danny (Minecraft BGM)</li>
+            </ol>
+          </aside>
+          <div class="preview-player">
+            <small>当前曲目</small>
+            <h2>Call of Silence</h2>
+            <p>制谱 · Aknices&amp;&amp;BA4KQS</p>
+            <div class="preview-progress"><span></span></div>
+            <div class="preview-meta"><span>1:15 / 2:16</span><strong>1.00x</strong></div>
+            <div class="preview-controls"><span>预览</span><b>开始演奏</b><span>停止</span></div>
+          </div>
+        </div>
+        <div class="overlay-preview">
+          <div><strong>Call of Silence</strong><small>55%</small></div>
+          <div class="overlay-line"><span></span></div>
+          <p>预览　　开始　　停止　　主窗</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section features" id="features" aria-labelledby="features-title">
+      <div class="section-heading">
+        <p>核心功能</p>
+        <h2 id="features-title">从选曲到演奏，只保留必要步骤</h2>
+      </div>
+      <ol class="feature-list">
+        <li><b>01</b><div><h3>快速找到曲目</h3><p>主窗口和悬浮窗都支持输入歌名；没有结果时可直接向维护者提交扒谱请求。</p></div></li>
+        <li><b>02</b><div><h3>按原曲 BPM 变速</h3><p>1.00x 始终代表原速，其余倍率以乐谱原始速度为基准加速或减速。</p></div></li>
+        <li><b>03</b><div><h3>紧凑悬浮控制</h3><p>按 F3 随时呼出；切歌、预览、开始、停止和进度跳转都在一个小窗口内。</p></div></li>
+        <li><b>04</b><div><h3>增量曲库更新</h3><p>只下载发生变化的曲谱，国内网络可选择预设 GitHub 镜像线路。</p></div></li>
+      </ol>
+    </section>
+
+    <section class="section download-section" id="download" aria-labelledby="download-title">
+      <div class="section-heading">
+        <p>下载</p>
+        <h2 id="download-title">选择适合你的版本</h2>
+        <span>Windows 64 位安装器。默认普通权限；若游戏无法接收按键，可在设置中开启管理员模式。</span>
+      </div>
+      <div class="download-shell">
+        <div class="edition-list" role="radiogroup" aria-label="选择下载版本">
+          <label class="edition-card is-selected">
+            <input type="radio" name="edition" value="lite" checked>
+            <span class="edition-main"><strong>Lite 精简版</strong><small>内置定制曲，可在应用内更新完整曲库</small></span>
+            <span class="edition-size" id="lite-size">21.8 MB</span>
+          </label>
+          <label class="edition-card">
+            <input type="radio" name="edition" value="full">
+            <span class="edition-main"><strong>Full 完整版</strong><small>附带全部曲谱，安装后即可离线使用</small></span>
+            <span class="edition-size" id="full-size">57.1 MB</span>
+          </label>
+        </div>
+        <div class="download-options">
+          <label for="mirror-select">下载线路</label>
+          <select id="mirror-select">
+            <option value="https://ghfast.top/">国内镜像 · ghfast.top</option>
+            <option value="https://gh-proxy.com/">备用镜像 · gh-proxy.com</option>
+            <option value="">GitHub 直连</option>
+          </select>
+          <a class="button button-primary download-button" id="download-button" href="#">下载 Lite 精简版</a>
+          <p class="download-meta"><span id="release-version">v1.0.3</span><span>Windows 64 位</span><span>默认普通权限</span></p>
+          <div class="checksum-row"><code id="checksum">SHA-256 加载中…</code><button type="button" id="copy-checksum">复制</button></div>
+          <p class="download-note" id="download-note">国内线路会通过所选镜像转发 GitHub Release 下载。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section request-section" id="request" aria-labelledby="request-title">
+      <div class="section-heading">
+        <p>曲库没有找到？</p>
+        <h2 id="request-title">提交扒谱请求</h2>
+        <span>填写歌曲信息后会打开项目的 GitHub Issue，并自动带上内容供你确认提交。</span>
+      </div>
+      <form class="request-form" id="request-form">
+        <label>歌曲名称<input id="request-title-input" name="title" required maxlength="120" placeholder="例如：最后一吻"></label>
+        <label>歌曲链接<input id="request-source" name="source" type="url" placeholder="Bilibili、YouTube 或其他音源链接"></label>
+        <label class="request-notes">补充说明<textarea id="request-notes" name="notes" rows="4" maxlength="500" placeholder="希望的版本、调式或其他说明（选填）"></textarea></label>
+        <div class="request-action">
+          <p>提交前可在 GitHub 页面再次检查内容。</p>
+          <button class="button button-primary" type="submit">继续到 GitHub 提交</button>
+        </div>
+      </form>
+      <div class="qq-fallback" aria-label="没有 GitHub 时的联系方式">
+        <div>
+          <strong>没有 GitHub？</strong>
+          <span>可以添加作者 QQ，发送歌名、音源链接和版本要求。作者会不定期处理扒谱请求。</span>
+        </div>
+        <div class="qq-contact">
+          <code id="author-qq">2912173424</code>
+          <button class="button button-secondary" type="button" id="copy-qq">复制作者 QQ</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div><strong>SkyAutoMusic</strong><span>让音乐在云端相遇。</span></div>
+    <p><a class="footer-link" href="https://github.com/Aknices-QWQ/SkyAutoMusic" target="_blank" rel="noreferrer">GitHub 项目主页 ↗</a> · 定制曲谱署名 Aknices&amp;&amp;BA4KQS · GPL-3.0</p>
+  </footer>
+</body>
+</html>

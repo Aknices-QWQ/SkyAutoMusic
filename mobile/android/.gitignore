@@ -1,0 +1,5 @@
+# Local Android/Gradle output. The build task copies the desktop library here.
+.gradle/
+build/
+app/build/
+local.properties

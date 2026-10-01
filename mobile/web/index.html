@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>SkyAutoMusic 手机同步</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; background: #101214; color: #f4f5f6; }
+    body { margin: 0; background: #101214; }
+    main { max-width: 720px; margin: 0 auto; padding: 22px 18px 40px; }
+    h1 { margin: 0 0 6px; font-size: 25px; }
+    p { color: #aeb5bd; line-height: 1.5; }
+    section { border-top: 1px solid #34383d; padding: 18px 0; }
+    label { display: block; color: #cfd4d9; font-size: 13px; margin: 10px 0 5px; }
+    input, select, button { box-sizing: border-box; width: 100%; min-height: 44px; border: 1px solid #555b62; border-radius: 5px; background: #1b1e21; color: #f4f5f6; padding: 9px 11px; font-size: 15px; }
+    button { cursor: pointer; background: #e3e5e7; color: #111315; font-weight: 650; }
+    button.secondary { background: #25282c; color: #f4f5f6; }
+    .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .value { font-size: 16px; color: #fff; min-height: 25px; }
+    .muted { font-size: 13px; color: #9299a1; }
+    @media (max-width: 480px) { .row { grid-template-columns: 1fr; } .two { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SkyAutoMusic 手机同步</h1>
+  <p>这是电脑端的可选遥控页。Android 原生版可以在无电脑时独立播放本地曲谱。</p>
+  <section>
+    <label for="token">配对令牌</label>
+    <input id="token" type="password" autocomplete="off" placeholder="粘贴电脑端显示的令牌">
+    <button id="connect">连接电脑</button>
+    <div id="status" class="muted" aria-live="polite">尚未连接</div>
+  </section>
+  <section>
+    <div id="song" class="value">未选择曲谱</div>
+    <div id="time" class="muted">0:00 / 0:00</div>
+    <label for="progress">进度</label>
+    <input id="progress" type="range" min="0" max="100" value="0">
+    <div class="two">
+      <button id="start">播放</button>
+      <button id="stop" class="secondary">停止</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="preview" class="secondary">预览</button>
+      <button id="slower" class="secondary">减速</button>
+      <button id="faster" class="secondary">加速</button>
+    </div>
+    <label for="library">曲库</label>
+    <select id="library"><option value="">连接后读取曲库</option></select>
+  </section>
+</main>
+<script>
+(() => {
+  const origin = location.origin;
+  const tokenInput = document.querySelector('#token');
+  const status = document.querySelector('#status');
+  const song = document.querySelector('#song');
+  const time = document.querySelector('#time');
+  const progress = document.querySelector('#progress');
+  const library = document.querySelector('#library');
+  let token = localStorage.getItem('sky_token') || new URLSearchParams(location.search).get('token') || '';
+  tokenInput.value = token;
+  let state = { speed: 1 };
+  const api = async (path, options = {}) => {
+    const headers = Object.assign({ 'X-Sky-Token': token, 'Accept': 'application/json' }, options.headers || {});
+    const response = await fetch(origin + path, Object.assign({}, options, { headers }));
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || ('HTTP ' + response.status));
+    return body;
+  };
+  const setStatus = text => { status.textContent = text; };
+  const send = async (action) => {
+    try { await api('/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) }); await refresh(); }
+    catch (error) { setStatus(error.message); }
+  };
+  const refresh = async () => {
+    const next = await api('/api/state'); state = next;
+    song.textContent = next.song_title || '未选择曲谱';
+    time.textContent = (next.elapsed || '0:00') + ' / ' + (next.duration || '0:00');
+    progress.value = Number(next.progress || 0);
+    setStatus(next.status || '已连接');
+  };
+  const loadLibrary = async () => {
+    const data = await api('/api/library?limit=200');
+    library.replaceChildren();
+    data.items.forEach(item => { const option = document.createElement('option'); option.value = item.filename; option.textContent = item.title || item.filename; library.append(option); });
+  };
+  document.querySelector('#connect').onclick = async () => {
+    token = tokenInput.value.trim(); localStorage.setItem('sky_token', token);
+    try { await api('/api/health'); await refresh(); await loadLibrary(); setStatus('已连接'); }
+    catch (error) { setStatus(error.message); }
+  };
+  document.querySelector('#start').onclick = () => send({ action: 'start' });
+  document.querySelector('#stop').onclick = () => send({ action: 'stop' });
+  document.querySelector('#preview').onclick = () => send({ action: 'preview' });
+  document.querySelector('#slower').onclick = () => send({ action: 'set_speed', value: Math.max(0.25, Number(state.speed || 1) - 0.05) });
+  document.querySelector('#faster').onclick = () => send({ action: 'set_speed', value: Math.min(2, Number(state.speed || 1) + 0.05) });
+  progress.onchange = () => send({ action: 'seek', value: Number(progress.value) });
+  library.onchange = () => { if (library.value) send({ action: 'select', filename: library.value }); };
+  if (token) document.querySelector('#connect').click();
+  setInterval(() => { if (token) refresh().catch(() => {}); }, 1200);
+})();
+</script>
+</body>
+</html>

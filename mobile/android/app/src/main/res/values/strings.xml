@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SkyAutoMusic Mobile</string>
+    <string name="accessibility_service_label">SkyAutoMusic 屏幕点击</string>
+    <string name="accessibility_service_description">按曲谱节奏点击 Sky 游戏的 15 键音符区域。</string>
+</resources>

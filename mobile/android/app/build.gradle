@@ -1,0 +1,60 @@
+plugins {
+    id "com.android.application"
+}
+
+def repositoryRoot = projectDir.parentFile.parentFile.parentFile
+def desktopVersionSource = new File(repositoryRoot, "app_updater.py").getText("UTF-8")
+def versionMatcher = desktopVersionSource =~ /APP_VERSION\s*=\s*["']([^"']+)["']/
+def desktopVersion = versionMatcher.find() ? versionMatcher.group(1) : "1.0.0"
+def versionParts = desktopVersion.tokenize(".").collect { it.toInteger() }
+while (versionParts.size() < 3) {
+    versionParts.add(0)
+}
+def mobileVersionCode = versionParts[0] * 1000000 + versionParts[1] * 1000 + versionParts[2]
+
+android {
+    namespace "dev.xxlab.skyautomusic"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "dev.xxlab.skyautomusic"
+        minSdk 24
+        targetSdk 36
+        versionCode mobileVersionCode
+        versionName "${desktopVersion}-mobile"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+def desktopScoreDirectory = new File(repositoryRoot, "Sheet Music")
+def mobileAssetDirectory = new File(buildDir, "generated/mobile-assets")
+def mobileScoreDirectory = new File(mobileAssetDirectory, "scores")
+
+android.sourceSets.main.assets.srcDir(mobileAssetDirectory)
+
+tasks.register("syncDesktopScores", Sync) {
+    from(desktopScoreDirectory) {
+        include("*.json")
+        exclude("新手练习.json", "音阶示例.json")
+        exclude { details ->
+            def name = details.file.name.toLowerCase(Locale.ROOT)
+            name.contains(".bak") || name.contains(".wrong-base-") || name.contains(".space-rebuild.")
+        }
+    }
+    into(mobileScoreDirectory)
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("syncDesktopScores")
+}
