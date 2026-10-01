@@ -70,6 +70,9 @@ from midi_sky import MidiSkyPanel
 from floating_score import FloatingScoreView
 from mobile_remote import MobileRemoteServer, create_pairing_token
 from score_editor import ScoreEditorPage
+from score_playback import PlaybackSession
+from section_editor import SectionEditor
+from song_sections import estimate_sections, note_groups, score_end_ms, score_fingerprint, validate_sections
 from sky_sounds import (
     INSTRUMENT_CUSTOM_ICONS, INSTRUMENT_ICON_CODES, INSTRUMENT_LABELS, LOCATION_PRESETS, PITCHES,
     SAMPLE_COUNTS, SPECY_INSTRUMENTS, SOURCE_URL, download_specy_instrument,
@@ -343,6 +346,7 @@ class PlayerSignals(QObject):
     score_step_requested = Signal(int)
     overlay_lock_requested = Signal()
     score_scroll_requested = Signal()
+    playback_event = Signal(int, str, object)
 
 
 class SkySoundSignals(QObject):
@@ -539,14 +543,18 @@ class FloatingControl(QWidget):
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setObjectName("OverlayDanger")
         self.main_btn = QPushButton("主窗")
-        for button in (self.start_btn, self.preview_btn, self.stop_btn, self.main_btn):
+        self.immediate_btn = QPushButton("立即")
+        self.immediate_btn.setToolTip("立即演奏，跳过 3 秒倒计时")
+        for button in (self.start_btn, self.preview_btn, self.stop_btn, self.main_btn, self.immediate_btn):
             button.setMinimumHeight(30)
         self.start_btn.clicked.connect(main.start_play)
+        self.immediate_btn.clicked.connect(lambda: main.start_play(immediate=True))
         self.preview_btn.clicked.connect(main.toggle_preview)
         self.stop_btn.clicked.connect(main.stop_play)
         self.main_btn.clicked.connect(main.toggle_main_window)
         controls.addWidget(self.preview_btn, 1)
         controls.addWidget(self.start_btn, 2)
+        controls.addWidget(self.immediate_btn, 1)
         controls.addWidget(self.stop_btn, 1)
         controls.addWidget(self.main_btn, 1)
         root.addLayout(controls)
@@ -1408,8 +1416,19 @@ class MainWindow(QMainWindow):
         self.bpm = 120
         self.player_thread = None
         self.stop_event = threading.Event()
-        self.seek_lock = threading.Lock()
-        self.seek_request_index = None
+        self.playback_session = None
+        self.playback_generation = 0
+        self.position_index = 0
+        self.resume_index = 0
+        self.playback_complete = False
+        positions = self.config.get("playback_positions", {})
+        self.playback_positions = dict(positions) if isinstance(positions, dict) else {}
+        saved_sections = self.config.get("song_sections", {})
+        self.saved_song_sections = dict(saved_sections) if isinstance(saved_sections, dict) else {}
+        self.song_sections = []
+        self.sections_ready = False
+        self.sections_dialog = None
+        self.score_signature = ""
         self.global_hotkey_handles = []
         self.previewing = False
         self._mobile_note_keys = []
@@ -1431,6 +1450,7 @@ class MainWindow(QMainWindow):
         self.signals.progress.connect(self.on_worker_progress)
         self.signals.finished.connect(self.on_worker_finished)
         self.signals.status.connect(self.set_status)
+        self.signals.playback_event.connect(self.on_playback_event, Qt.QueuedConnection)
         self.signals.start_requested.connect(self.start_from_shortcut)
         self.signals.play_stop_requested.connect(self.stop_play)
         self.signals.stop_requested.connect(self.force_stop)
@@ -1812,6 +1832,23 @@ class MainWindow(QMainWindow):
         time_layout.addWidget(self.progress)
         right.addWidget(time_box)
 
+        section_row = QHBoxLayout()
+        self.section_combo = QComboBox()
+        self.section_combo.setAccessibleName("播放歌曲段落")
+        self.section_combo.addItem("全曲", None)
+        self.section_combo.setMinimumWidth(0)
+        self.section_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.section_combo.currentIndexChanged.connect(self.on_section_selected)
+        self.section_button = QPushButton("歌曲段落…")
+        self.section_button.setToolTip("识别与编辑 A 段、B 段、高潮候选；可单独播放和循环")
+        self.section_button.clicked.connect(self.show_song_sections)
+        self.section_loop = QCheckBox("循环")
+        self.section_loop.setToolTip("循环选中的段落；选择全曲时循环全曲")
+        section_row.addWidget(self.section_combo, 1)
+        section_row.addWidget(self.section_loop)
+        section_row.addWidget(self.section_button)
+        right.addLayout(section_row)
+
         settings = QFrame()
         settings.setObjectName("SettingsSection")
         settings_row = QHBoxLayout(settings)
@@ -1955,20 +1992,25 @@ class MainWindow(QMainWindow):
         transport_layout.setSpacing(10)
         self.start_btn = QPushButton("开始演奏")
         self.start_btn.setObjectName("PrimaryButton")
+        self.start_btn.setToolTip("从保存的位置继续演奏，3 秒倒计时后开始")
+        self.immediate_btn = QPushButton("立即播放")
+        self.immediate_btn.setToolTip("立即演奏到目标窗口，跳过 3 秒倒计时；本机试听请点预览")
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setObjectName("DangerButton")
         self.preview_btn = QPushButton("预览")
         self.overlay_btn = QPushButton("悬浮琴谱")
         self.overlay_btn.setToolTip("打开光遇 15 键琴谱，在游戏里看谱弹奏；F3 显示 / 隐藏")
-        for button in (self.start_btn, self.stop_btn, self.preview_btn, self.overlay_btn):
+        for button in (self.start_btn, self.immediate_btn, self.stop_btn, self.preview_btn, self.overlay_btn):
             button.setMinimumHeight(52)
         self.stop_btn.setEnabled(False)
         self.start_btn.clicked.connect(self.start_play)
+        self.immediate_btn.clicked.connect(lambda: self.start_play(immediate=True))
         self.stop_btn.clicked.connect(self.stop_play)
         self.preview_btn.clicked.connect(self.toggle_preview)
         self.overlay_btn.clicked.connect(self.toggle_score_overlay)
         transport_layout.addWidget(self.preview_btn, 2)
         transport_layout.addWidget(self.start_btn, 3)
+        transport_layout.addWidget(self.immediate_btn, 2)
         transport_layout.addWidget(self.stop_btn, 3)
         transport_layout.addWidget(self.overlay_btn, 2)
         page_layout.addWidget(transport)
@@ -3161,7 +3203,8 @@ class MainWindow(QMainWindow):
         self.all_files = sorted([p.name for p in SHEET_MUSIC_DIR.glob("*.json")], key=str.lower)
         self.refresh_list()
         if self.all_files and not self.selected_file:
-            self.select_file(self.all_files[0], sync_list=True)
+            saved = self.config.get("last_selected_file")
+            self.select_file(saved if saved in self.all_files else self.all_files[0], sync_list=True)
         self.publish_mobile_state(include_library=True)
 
     def refresh_files_if_changed(self):
@@ -3283,6 +3326,8 @@ class MainWindow(QMainWindow):
             self.clear_selected_song()
         self.favorites.discard(filename)
         self.speed_presets.pop(filename, None)
+        self.playback_positions.pop(filename, None)
+        self.saved_song_sections.pop(filename, None)
         write_json(FAVORITES_FILE, sorted(self.favorites))
         self.save_config()
         self.all_files = sorted([p.name for p in SHEET_MUSIC_DIR.glob("*.json")], key=str.lower)
@@ -3297,6 +3342,15 @@ class MainWindow(QMainWindow):
         self.meta = {}
         self.notes_by_time = defaultdict(list)
         self.sorted_times = []
+        self.current_score_notes = []
+        self.position_index = self.resume_index = 0
+        self.playback_complete = False
+        self.song_sections = []
+        self.sections_ready = False
+        self.score_signature = ""
+        self.refresh_section_choices()
+        if self.sections_dialog:
+            self.sections_dialog.hide()
         self.bpm = 120
         self.name_label.setText("请选择一首乐谱")
         self.song_summary_label.setText("—")
@@ -3326,27 +3380,44 @@ class MainWindow(QMainWindow):
     def select_file(self, filename, sync_list=True):
         if filename not in self.all_files:
             return
-        if filename != self.selected_file and (self.previewing or (self.player_thread and self.player_thread.is_alive())):
+        if filename == self.selected_file and self.playback_session:
+            return
+        if filename != self.selected_file and (self.previewing or self.playback_session or
+                                                (self.player_thread and self.player_thread.is_alive())):
             self.stop_play()
-        self.selected_file = filename
         try:
-            self.meta, notes = parse_music_file(filename)
+            meta, notes = parse_music_file(filename)
         except Exception as exc:
             QMessageBox.critical(self, "错误", str(exc))
             return
-        self.current_score_notes = [
-            {"time": note.get("time"), "key": note.get("key")}
-            for note in notes
-            if isinstance(note, dict) and "time" in note and "key" in note
-        ]
-        self.bpm = int(self.meta.get("bpm", 120) or 120)
+        self.remember_position()
+        self.selected_file = filename
+        self.meta = meta
+        groups = note_groups(notes)
+        self.current_score_notes = [{"time": time, "key": f"1Key{pitch}"}
+                                    for time, pitches in groups for pitch in pitches]
+        try:
+            self.bpm = int(self.meta.get("bpm", 120) or 120)
+        except (TypeError, ValueError, OverflowError):
+            self.bpm = 120
         self.notes_by_time = defaultdict(list)
-        for note in notes:
-            try:
-                self.notes_by_time[int(note["time"])].append(note["key"])
-            except Exception:
-                pass
+        for note in self.current_score_notes:
+            self.notes_by_time[note["time"]].append(note["key"])
         self.sorted_times = sorted(self.notes_by_time.keys())
+        self.score_signature = score_fingerprint(self.current_score_notes)
+        self.restore_position()
+        self.song_sections = []
+        self.sections_ready = False
+        stored = self.saved_song_sections.get(filename)
+        if isinstance(stored, dict) and stored.get("signature") == self.score_signature:
+            try:
+                self.song_sections = validate_sections(stored.get("sections"), groups)
+                self.sections_ready = True
+            except ValueError:
+                pass
+        self.refresh_section_choices()
+        if self.sections_dialog:
+            self.sections_dialog.hide()
         self.overlay.set_score(self.notes_by_time)
         raw_title = self.meta.get("songName") or self.meta.get("name") or self.display_song_name(filename)
         self.name_label.setText(clean_song_name(raw_title) or self.display_song_name(filename))
@@ -3358,17 +3429,21 @@ class MainWindow(QMainWindow):
         self.update_game_score()
         self.apply_speed_preset(filename)
         self.on_speed_changed()
-        self.set_progress(0)
+        self.show_position()
         self.update_total_time()
         self.set_status(f"已选择乐谱: {filename}")
         if sync_list:
+            self.list_widget.blockSignals(True)
             for i in range(self.list_widget.count()):
                 if self.list_widget.item(i).data(Qt.UserRole) == filename:
                     self.list_widget.setCurrentRow(i)
                     break
+            self.list_widget.blockSignals(False)
         if self.overlay.isVisible():
             self.overlay.refresh()
         self.publish_mobile_state(include_score=True)
+        self.remember_position()
+        self.save_config()
 
     def overlay_song_files(self):
         if self.overlay_mode == "收藏":
@@ -3492,6 +3567,109 @@ class MainWindow(QMainWindow):
             self.select_file(self.selected_file, sync_list=False)
         return bool(self.sorted_times)
 
+    def refresh_section_choices(self):
+        self.section_combo.blockSignals(True)
+        self.section_combo.clear()
+        self.section_combo.addItem("全曲", None)
+        for section in self.song_sections:
+            suffix = " · 估计" if section.estimated else ""
+            self.section_combo.addItem(section.name + suffix, section)
+        self.section_combo.blockSignals(False)
+        self.section_button.setEnabled(bool(self.sorted_times))
+
+    def show_song_sections(self):
+        if not self.load_music():
+            return
+        if not self.sections_ready:
+            self.store_song_sections(estimate_sections(self.current_score_notes))
+        if not self.sections_dialog:
+            self.sections_dialog = SectionEditor(self)
+        if not self.sections_dialog.isVisible():
+            self.sections_dialog.set_song()
+        self.sections_dialog.show()
+        self.sections_dialog.raise_()
+
+    def store_song_sections(self, sections):
+        selected = self.section_combo.currentData()
+        if self.playback_session or (self.player_thread and self.player_thread.is_alive()):
+            self.stop_play()
+        self.song_sections = sections
+        self.sections_ready = True
+        self.saved_song_sections[self.selected_file] = {
+            "signature": self.score_signature,
+            "sections": [section.to_dict() for section in sections],
+        }
+        self.refresh_section_choices()
+        if selected in sections:
+            self.section_combo.blockSignals(True)
+            self.section_combo.setCurrentIndex(sections.index(selected) + 1)
+            self.section_combo.blockSignals(False)
+        self.save_config()
+
+    def on_section_selected(self, *_):
+        if not self.sorted_times:
+            return
+        if self.playback_session or (self.player_thread and self.player_thread.is_alive()):
+            self.stop_play()
+        section = self.section_combo.currentData()
+        if section:
+            self.position_index = self.resume_index = bisect_left(self.sorted_times, section.start_ms)
+            self.playback_complete = False
+            self.show_position()
+            self.remember_position()
+            self.save_config()
+            self.set_status(f"已选择 {section.name}，播放至本段结束")
+
+    def play_section(self, section, preview=False, loop=False, immediate=False):
+        self.stop_play()
+        self.section_combo.blockSignals(True)
+        self.section_combo.setCurrentIndex(self.song_sections.index(section) + 1)
+        self.section_combo.blockSignals(False)
+        self.section_loop.setChecked(loop)
+        self.position_index = self.resume_index = bisect_left(self.sorted_times, section.start_ms)
+        self.playback_complete = False
+        self.show_position()
+        if preview:
+            self.start_preview()
+        else:
+            self.start_play(immediate=immediate)
+
+    def remember_position(self):
+        if not self.selected_file or not self.sorted_times:
+            return
+        current = min(len(self.sorted_times) - 1, max(0, self.position_index))
+        next_time = self.sorted_times[self.resume_index] if 0 <= self.resume_index < len(self.sorted_times) else None
+        self.playback_positions[self.selected_file] = {
+            "signature": self.score_signature,
+            "time_ms": self.sorted_times[current], "next_ms": next_time,
+            "complete": self.playback_complete,
+        }
+
+    def restore_position(self):
+        self.position_index = self.resume_index = 0
+        self.playback_complete = False
+        stored = self.playback_positions.get(self.selected_file)
+        if not self.sorted_times or not isinstance(stored, dict) or stored.get("signature") != self.score_signature:
+            return
+        try:
+            self.position_index = min(len(self.sorted_times)-1, bisect_left(self.sorted_times, int(stored["time_ms"])))
+            self.resume_index = (bisect_left(self.sorted_times, int(stored["next_ms"]))
+                                 if stored.get("next_ms") is not None else len(self.sorted_times))
+            self.playback_complete = bool(stored.get("complete"))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            self.position_index = self.resume_index = 0
+
+    def show_position(self):
+        if not self.sorted_times:
+            self.set_progress(0, 0)
+            return
+        index = min(len(self.sorted_times)-1, max(0, self.position_index))
+        duration = max(1, self.sorted_times[-1] - self.sorted_times[0])
+        elapsed = (self.sorted_times[index] - self.sorted_times[0]) / 1000 * self.effective_factor()
+        percent = 100 if self.playback_complete else int((self.sorted_times[index] - self.sorted_times[0]) / duration * 100)
+        self.set_progress(percent, elapsed)
+        self.overlay.follow_playback(self.sorted_times[index])
+
     def set_status(self, text):
         self.status.setText(text)
         self.overlay.status_label.setText(text)
@@ -3504,6 +3682,7 @@ class MainWindow(QMainWindow):
         self.speed_slider.setValue(int(value * 100))
 
     def on_speed_changed(self):
+        self._playback_factor = self.effective_factor()
         effective_bpm = self.bpm * self.speed() if self.bpm else 0
         bpm_text = f" · {effective_bpm:g} BPM" if effective_bpm else ""
         self.speed_label.setText(f"{self.speed():.2f}x{bpm_text}")
@@ -3511,6 +3690,8 @@ class MainWindow(QMainWindow):
         self.publish_mobile_state()
 
     def update_effect_labels(self):
+        self._playback_delay = self.delay_slider.value()
+        self._playback_wrong = self.wrong_slider.value()
         self.delay_label.setText(f"{self.delay_slider.value()}%")
         self.wrong_label.setText(f"{self.wrong_slider.value()}%")
         self.publish_mobile_state()
@@ -3531,7 +3712,7 @@ class MainWindow(QMainWindow):
     def update_total_time(self):
         elapsed = 0
         if self.sorted_times:
-            idx = self.progress_to_index(self.progress.value())
+            idx = min(len(self.sorted_times)-1, max(0, self.position_index))
             elapsed = (self.sorted_times[idx] - self.sorted_times[0]) / 1000 * self.effective_factor()
         self.time_label.setText(
             f"{self.format_seconds(elapsed)} / {self.format_seconds(self.total_seconds())}"
@@ -3584,18 +3765,26 @@ class MainWindow(QMainWindow):
             return
         percent = self.progress.value()
         idx = self.progress_to_index(percent)
+        section = self.section_combo.currentData()
+        if section:
+            start = bisect_left(self.sorted_times, section.start_ms)
+            end = bisect_left(self.sorted_times, section.end_ms)
+            idx = max(start, min(end - 1, idx))
+        self.position_index = self.resume_index = idx
+        self.playback_complete = False
         elapsed = (self.sorted_times[idx] - self.sorted_times[0]) / 1000 * self.effective_factor()
-        is_active = self.previewing or bool(self.player_thread and self.player_thread.is_alive())
+        is_active = self.playback_session is not None
         if is_active:
-            with self.seek_lock:
-                self.seek_request_index = idx
+            self.playback_session.seek(idx)
             self.release_all_keys()
             self.set_status(f"已跳转到 {self.format_seconds(elapsed)}")
         else:
             self.set_status(f"已定位到 {self.format_seconds(elapsed)}")
-        self.set_progress(percent, elapsed)
+        self.show_position()
         self.overlay.stop_score_scroll()
         self.overlay.follow_playback(self.sorted_times[idx])
+        self.remember_position()
+        self.save_config()
 
     def apply_speed_preset(self, filename):
         try:
@@ -3618,7 +3807,8 @@ class MainWindow(QMainWindow):
         self.set_status("已清除本曲速度预设")
 
     def apply_wrong_key(self, note_key):
-        if self.wrong_slider.value() <= 0 or random.random() * 100 >= self.wrong_slider.value():
+        wrong = getattr(self, "_playback_wrong", 0)
+        if wrong <= 0 or random.random() * 100 >= wrong:
             return note_key
         try:
             idx = int(note_key.split("Key", 1)[1])
@@ -3633,25 +3823,53 @@ class MainWindow(QMainWindow):
             return note_key
         return note_key.split("Key", 1)[0] + "Key" + str(random.choice(candidates))
 
-    def start_play(self):
+    def start_play(self, immediate=False):
         if self.player_thread and self.player_thread.is_alive():
             return
         if self.previewing:
             self.stop_preview()
-        if not self.load_music():
+        if not self.load_music() or not self.confirm_admin_tip_before_play():
             return
-        if not self.confirm_admin_tip_before_play():
+        self.start_playback(preview=False, immediate=immediate)
+
+    def start_playback(self, preview=False, immediate=False):
+        if self.player_thread and self.player_thread.is_alive():
             return
         self.midi_game.stop()
         self.overlay.stop_score_scroll()
         self.midi_practice.stop_practice()
-        start_idx = self.progress_to_index(self.progress.value())
+        section = self.section_combo.currentData()
+        start = bisect_left(self.sorted_times, section.start_ms) if section else 0
+        end = bisect_left(self.sorted_times, section.end_ms) if section else len(self.sorted_times)
+        resume = self.resume_index if start <= self.resume_index < end else start
+        if self.playback_complete:
+            resume = start
+            self.playback_complete = False
         self.stop_event.clear()
-        with self.seek_lock:
-            self.seek_request_index = None
+        self.playback_generation += 1
+        generation = self.playback_generation
+        self.previewing = preview
         self.start_btn.setEnabled(False)
+        self.immediate_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.player_thread = threading.Thread(target=self.play_loop, args=(start_idx, False), daemon=True)
+        self.preview_btn.setText("停止预览" if preview else "预览")
+        self.overlay.preview_btn.setText("停止" if preview else "预览")
+        notes = {time: list(keys) for time, keys in self.notes_by_time.items()}
+        session = PlaybackSession(tuple(self.sorted_times), notes, start, end,
+                                  section.end_ms if section else score_end_ms(note_groups(self.current_score_notes)),
+                                  preview=preview, countdown=0 if immediate else 3,
+                                  loop=self.section_loop.isChecked(), compensate=bool(self.meta.get("playerPressCompensationMs")))
+        self.playback_session = session
+
+        def emit(kind, payload):
+            self.signals.playback_event.emit(generation, kind, payload)
+
+        def worker():
+            session.run(emit, self.press_notes, self.release_notes, self.apply_wrong_key,
+                        lambda: self._playback_factor, lambda: self._playback_delay,
+                        resume_index=resume)
+
+        self.player_thread = threading.Thread(target=worker, daemon=True)
         self.player_thread.start()
 
     def stop_play(self):
@@ -3659,12 +3877,15 @@ class MainWindow(QMainWindow):
         if self.midi_game:
             self.midi_game.stop()
         self.overlay.stop_score_scroll()
+        self.playback_generation += 1
         self.stop_event.set()
+        if self.playback_session:
+            self.playback_session.stop.set()
         if self.player_thread and self.player_thread.is_alive():
             self.player_thread.join(timeout=0.2)
-        with self.seek_lock:
-            self.seek_request_index = None
+        self.remember_session_position()
         self.previewing = False
+        self.playback_session = None
         self.silence_preview_audio()
         try:
             import winsound
@@ -3673,15 +3894,23 @@ class MainWindow(QMainWindow):
             pass
         self.release_all_keys()
         self.start_btn.setEnabled(True)
+        self.immediate_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.preview_btn.setText("预览")
         self.overlay.preview_btn.setText("预览")
+        self.overlay.keys_label.setText("当前按键：—")
+        self._mobile_note_keys = []
+        self.show_position()
+        self.remember_position()
+        self.save_config()
         self.set_status("已停止")
 
     def force_stop(self):
         self.stop_play()
         self.realtime_recognition.stop_listening()
-        self.set_progress(0, 0)
+        self.remember_position()
+        self.save_config()
+        self.show_position()
         self.overlay.keys_label.setText("当前按键：—")
         self.set_status("ESC 已停止")
 
@@ -3697,84 +3926,57 @@ class MainWindow(QMainWindow):
             return
         if not self.load_music():
             return
-        self.midi_game.stop()
-        self.overlay.stop_score_scroll()
-        self.midi_practice.stop_practice()
-        self.previewing = True
-        self.stop_event.clear()
-        self.stop_btn.setEnabled(True)
-        self.preview_btn.setText("停止预览")
-        self.overlay.preview_btn.setText("停止")
-        start_idx = self.progress_to_index(self.progress.value())
-        with self.seek_lock:
-            self.seek_request_index = None
-        self.player_thread = threading.Thread(target=self.play_loop, args=(start_idx, True), daemon=True)
-        self.player_thread.start()
+        self.start_playback(preview=True)
 
     def stop_preview(self):
-        self.stop_event.set()
-        with self.seek_lock:
-            self.seek_request_index = None
-        self.previewing = False
-        self.silence_preview_audio()
-        self.preview_btn.setText("预览")
-        self.overlay.preview_btn.setText("预览")
-        self.stop_btn.setEnabled(False)
+        self.stop_play()
         self.set_status("预览已停止")
 
-    def play_loop(self, start_idx, preview):
-        # Keep the active score alive even if its file is removed from the UI.
-        sorted_times = self.sorted_times
-        notes_by_time = self.notes_by_time
-        meta = self.meta
-        total = len(sorted_times)
-        if not total or self.stop_event.is_set():
-            self.signals.finished.emit(True)
+    def remember_session_position(self):
+        session = self.playback_session
+        if not session:
             return
-        t0 = sorted_times[0]
-        if not preview:
-            for remaining in (3, 2, 1):
-                if self.stop_event.is_set():
-                    self.signals.finished.emit(True)
-                    return
-                self.signals.status.emit(f"{remaining} 秒后开始，请切到目标窗口")
-                self.stop_event.wait(1)
-        idx = max(0, min(total - 1, start_idx))
-        while idx < total and not self.stop_event.is_set():
-            with self.seek_lock:
-                if self.seek_request_index is not None:
-                    idx = max(0, min(total - 1, self.seek_request_index))
-                    self.seek_request_index = None
-            t = sorted_times[idx]
-            note_keys = [self.apply_wrong_key(k) for k in notes_by_time[t]]
-            if preview:
-                self.preview_note(note_keys)
-                press_duration = 0.0
-            else:
-                self.press_notes(note_keys)
-                press_duration = 0.05
-                time.sleep(press_duration)
-                self.release_notes(note_keys)
-            elapsed = max(0, (t - t0) / 1000 * self.effective_factor())
-            duration_ms = max(1, sorted_times[-1] - t0)
-            percent = int((t - t0) / duration_ms * 100)
-            self.signals.progress.emit(percent, self.format_seconds(elapsed), f"{idx+1}/{total}", note_keys)
-            if idx < total - 1:
-                interval = (sorted_times[idx + 1] - t) / 1000 * self.effective_factor()
-                if not meta.get("playerPressCompensationMs"):
-                    interval = max(0, interval - press_duration)
-                if self.delay_slider.value() > 0:
-                    interval *= 1 + random.uniform(-self.delay_slider.value(), self.delay_slider.value()) / 100
-                end = time.time() + max(0, interval)
-                while time.time() < end:
-                    if self.stop_event.is_set():
-                        break
-                    with self.seek_lock:
-                        if self.seek_request_index is not None:
-                            break
-                    time.sleep(min(0.03, end - time.time()))
-            idx += 1
-        self.signals.finished.emit(self.stop_event.is_set())
+        with session.lock:
+            if session.seek_index is not None:
+                self.position_index = self.resume_index = session.seek_index
+            elif session.position_index is not None:
+                self.position_index = session.position_index
+            if session.seek_index is None and session.next_index is not None:
+                self.resume_index = session.next_index
+
+    def on_playback_event(self, generation, kind, payload):
+        if generation != self.playback_generation:
+            return
+        if self.stop_event.is_set() or self.playback_session is None:
+            return
+        if kind == "status":
+            self.set_status(str(payload))
+        elif kind == "notes":
+            self.preview_note(payload)
+        elif kind == "progress":
+            index, keys = payload["index"], payload["keys"]
+            self.position_index, self.resume_index = index, index + 1
+            self.playback_complete = False
+            self.on_worker_progress(
+                int((self.sorted_times[index] - self.sorted_times[0]) / max(1, self.sorted_times[-1] - self.sorted_times[0]) * 100),
+                self.format_seconds((self.sorted_times[index] - self.sorted_times[0]) / 1000 * self.effective_factor()),
+                f"{index + 1}/{len(self.sorted_times)}", keys,
+            )
+        elif kind == "error":
+            self.set_status(f"播放失败：{payload}")
+        elif kind == "finished":
+            stopped = bool(payload)
+            session = self.playback_session
+            if session:
+                with session.lock:
+                    last = session.end_index - 1
+                    if not stopped:
+                        self.position_index = last
+                        self.resume_index = session.start_index
+                        self.playback_complete = self.section_combo.currentData() is None
+            self.on_worker_finished(stopped)
+            self.remember_position()
+            self.save_config()
 
     def on_worker_progress(self, percent, elapsed, count_text, note_keys):
         if self.stop_event.is_set():
@@ -3782,6 +3984,8 @@ class MainWindow(QMainWindow):
         self.set_progress(percent)
         index = int(count_text.split("/", 1)[0]) - 1
         if 0 <= index < len(self.sorted_times):
+            self.position_index, self.resume_index = index, index + 1
+            self.remember_position()
             self.overlay.follow_playback(self.sorted_times[index])
         text = f"{elapsed} / {self.format_seconds(self.total_seconds())}"
         self.time_label.setText(text)
@@ -3795,6 +3999,7 @@ class MainWindow(QMainWindow):
         self.release_all_keys()
         self.previewing = False
         self.start_btn.setEnabled(True)
+        self.immediate_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.preview_btn.setText("预览")
         self.overlay.preview_btn.setText("预览")
@@ -3802,8 +4007,10 @@ class MainWindow(QMainWindow):
         self._mobile_note_keys = []
         self.publish_mobile_state()
         if not stopped:
-            self.set_status("完成")
-            self.set_progress(100, self.total_seconds())
+            section = self.section_combo.currentData()
+            self.set_status(f"{section.name} 播放完成" if section else "完成")
+            self.show_position()
+        self.playback_session = None
 
     def press_notes(self, note_keys):
         for note in note_keys:
@@ -4293,6 +4500,9 @@ class MainWindow(QMainWindow):
             "random_delay_percent": self.delay_slider.value(),
             "wrong_key_percent": self.wrong_slider.value(),
             "speed_presets": self.speed_presets,
+            "playback_positions": self.playback_positions,
+            "last_selected_file": self.selected_file,
+            "song_sections": self.saved_song_sections,
             "overlay_music_mode": self.overlay_mode,
             "admin_mode": self.admin_mode,
             "admin_tip_count": self.admin_tip_count,

@@ -14,6 +14,10 @@ from PySide6.QtTest import QTest
 
 import play_music_qt as app
 from midi_keyboard import PracticeSession
+from score_playback import PlaybackSession
+from song_sections import SongSection
+
+_SAVE_CONFIG = app.MainWindow.save_config
 
 
 class FeaturePagesTests(unittest.TestCase):
@@ -54,6 +58,112 @@ class FeaturePagesTests(unittest.TestCase):
         self.assertIs(window.pages.currentWidget(), window.midi_practice)
         window.nav_play.click()
         self.assertIs(window.pages.currentWidget(), window.play_page)
+
+    def load_long_score(self):
+        notes = [{"time": index, "key": f"1Key{index % 15}"} for index in range(200)]
+        path = self.folder / "Sheet Music" / "A.json"
+        path.write_text(json.dumps({"songName": "A", "songNotes": notes}), encoding="utf-8")
+        self.window.select_file("A.json")
+        return self.window
+
+    def test_escape_keeps_exact_progress_switching_and_restart_restore_it(self):
+        window = self.load_long_score()
+        window.stop_event.clear()
+        window.on_worker_progress(0, "0:00", "2/200", ["1Key1"])
+        window.force_stop()
+        self.assertEqual(window.progress.value(), 0)
+        self.assertEqual((window.position_index, window.resume_index), (1, 2))
+        window.select_file("B.json")
+        window.select_file("A.json")
+        self.assertEqual((window.position_index, window.resume_index), (1, 2))
+        _SAVE_CONFIG(window)
+        config = json.loads((self.folder / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["playback_positions"]["A.json"]["time_ms"], 1)
+        self.assertEqual(config["playback_positions"]["A.json"]["next_ms"], 2)
+        restarted = app.MainWindow()
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.selected_file, "A.json")
+        self.assertEqual((restarted.position_index, restarted.resume_index), (1, 2))
+
+    def test_immediate_button_skips_countdown_and_section_loop_retains_start(self):
+        window = self.load_long_score()
+        section = SongSection("副歌", 30, 100, False)
+        window.store_song_sections([section])
+        window.section_combo.setCurrentIndex(1)
+        window.resume_index = 55
+        window.section_loop.setChecked(True)
+        worker = Mock()
+        worker.is_alive.return_value = False
+        with patch.object(window, "confirm_admin_tip_before_play", return_value=True), \
+             patch.object(app.threading, "Thread", return_value=worker):
+            window.immediate_btn.click()
+            self.assertEqual(window.playback_session.countdown, 0)
+            self.assertEqual(window.playback_session.start_index, 30)
+            self.assertEqual(window.playback_session.end_index, 100)
+            self.assertTrue(window.playback_session.loop)
+            window.stop_play()
+            window.start_play()
+            self.assertEqual(window.playback_session.countdown, 3)
+
+    def test_old_worker_events_and_finish_cannot_change_new_song_or_playback(self):
+        window = self.load_long_score()
+        old_generation = window.playback_generation
+        window.stop_play()
+        window.stop_event.clear()
+        window.playback_session = PlaybackSession(tuple(window.sorted_times), dict(window.notes_by_time), 0, 200, 300)
+        window.position_index = 50
+        with patch.object(window, "preview_note") as audio, patch.object(window, "release_all_keys") as release:
+            for kind, payload in (("notes", ["1Key5"]), ("finished", False),
+                                  ("progress", {"index": 1, "keys": ["1Key1"]}),
+                                  ("status", "旧状态")):
+                window.on_playback_event(old_generation, kind, payload)
+            audio.assert_not_called()
+            release.assert_not_called()
+        self.assertEqual(window.position_index, 50)
+
+    def test_section_finish_keeps_global_position_and_seek_stays_in_section(self):
+        window = self.load_long_score()
+        window.store_song_sections([SongSection("A 段", 30, 100)])
+        window.section_combo.setCurrentIndex(1)
+        window.stop_event.clear()
+        window.playback_session = PlaybackSession(tuple(window.sorted_times), dict(window.notes_by_time), 30, 100, 100)
+        generation = window.playback_generation
+        window.on_playback_event(generation, "finished", False)
+        self.assertEqual(window.progress.value(), 49)
+        self.assertEqual(window.resume_index, 30)
+        self.assertFalse(window.playback_complete)
+        window.progress.setValue(100)
+        window.seek_from_slider()
+        self.assertEqual(window.position_index, 99)
+        window.section_combo.setCurrentIndex(0)
+        window.progress.setValue(0)
+        window.seek_from_slider()
+        self.assertEqual((window.position_index, window.resume_index), (0, 0))
+
+    def test_section_editor_validates_saves_and_reloads_manual_labels(self):
+        window = self.load_long_score()
+        practice = PracticeSession([{64}])
+        window.midi_practice.session = practice
+        window.show_song_sections()
+        self.assertIs(window.midi_practice.session, practice)
+        dialog = window.sections_dialog
+        dialog.rows = [{"name": "主歌", "start_ms": 0, "end_ms": 100},
+                       {"name": "副歌", "start_ms": 100, "end_ms": 299}]
+        dialog.rebuild()
+        self.assertTrue(dialog.apply())
+        self.assertEqual([s.name for s in window.song_sections], ["主歌", "副歌"])
+        dialog.rows[0]["end_ms"] = 150
+        self.assertFalse(dialog.apply())
+        self.assertEqual(window.song_sections[0].end_ms, 100)
+        window.select_file("B.json")
+        window.select_file("A.json")
+        self.assertEqual([s.name for s in window.song_sections], ["主歌", "副歌"])
+        self.assertTrue(all(not s.estimated for s in window.song_sections))
+        # Explicitly deleting all sections stays empty when the editor is reopened.
+        window.store_song_sections([])
+        window.sections_dialog.hide()
+        window.show_song_sections()
+        self.assertEqual(window.song_sections, [])
 
     def test_game_tools_have_one_page_and_all_shortcuts_open_midi_tab(self):
         window = self.window
