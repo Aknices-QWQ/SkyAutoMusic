@@ -17,11 +17,12 @@ from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlencode
 
-from PySide6.QtCore import QFile, QObject, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QFile, QObject, QSignalBlocker, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QCursor, QDesktopServices, QIcon, QPainter, QPixmap, QShortcut, QKeySequence
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QSoundEffect
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractSpinBox,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -42,6 +43,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QPlainTextEdit,
     QProgressBar,
     QScrollArea,
     QSizePolicy,
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QTabWidget,
     QToolButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -67,7 +70,7 @@ import piastudy
 from app_updater import APP_VERSION, compare_versions, fetch_latest_release
 from midi_practice import MidiPracticePage
 from midi_sky import MidiSkyPanel
-from floating_score import FloatingScoreView
+from floating_score import FloatingScoreView, KEY_LABELS, KeyboardScoreInput
 from mobile_remote import MobileRemoteServer, create_pairing_token
 from score_editor import ScoreEditorPage
 from score_playback import PlaybackSession
@@ -441,6 +444,7 @@ class FloatingControl(QWidget):
         super().__init__()
         self.main = main
         self.drag_pos = None
+        self._changing_window_flags = False
         self._song_files_cache = []
         self.setWindowTitle("悬浮控制")
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -563,7 +567,7 @@ class FloatingControl(QWidget):
         self.score_button = QPushButton("琴谱")
         self.score_button.setCheckable(True)
         self.score_button.setChecked(bool(main.config.get("overlay_show_score", False)))
-        self.score_button.setToolTip("显示光遇 15 键琴谱；F5 上一组，F6 下一组，F9 自动翻谱")
+        self.score_button.setToolTip("显示光遇 15 键琴谱；F5 上一组，F6 下一组，F9 定时翻谱")
         self.score_button.clicked.connect(self.toggle_score)
         self.lock_button = QPushButton("穿透")
         self.lock_button.setCheckable(True)
@@ -591,17 +595,33 @@ class FloatingControl(QWidget):
         score_actions = QHBoxLayout()
         self.previous_button = QPushButton("上一组")
         self.next_button = QPushButton("下一组")
-        self.auto_score_button = QPushButton("自动翻谱")
+        self.auto_score_button = QPushButton("定时翻谱")
         self.auto_score_button.setCheckable(True)
+        self.auto_score_button.setToolTip("按曲谱时间自动前进 (F9)，不等待按键。")
+        self.keyboard_follow = QCheckBox("键盘跟谱")
+        self.keyboard_follow.setToolTip("电脑键盘按对亮起的音符组后自动翻谱；和弦同时按住，重复音松开再按。")
         self.midi_follow = QCheckBox("MIDI 跟谱")
         self.midi_follow.setToolTip("接入光遇后，弹对当前音符组再显示下一组；重复音需松开再弹。")
         self.previous_button.clicked.connect(lambda: self.step_score(-1))
         self.next_button.clicked.connect(lambda: self.step_score(1))
         self.auto_score_button.clicked.connect(self.toggle_score_scroll)
-        self.midi_follow.toggled.connect(lambda enabled: enabled and self.stop_score_scroll())
-        for widget in (self.previous_button, self.next_button, self.auto_score_button, self.midi_follow):
+        self.midi_follow.toggled.connect(self.toggle_midi_follow)
+        self.keyboard_follow.toggled.connect(self.toggle_keyboard_follow)
+        for widget in (self.previous_button, self.next_button, self.auto_score_button):
             score_actions.addWidget(widget)
         score_layout.addLayout(score_actions)
+        follow_actions = QHBoxLayout()
+        follow_actions.addWidget(self.keyboard_follow)
+        follow_actions.addWidget(self.midi_follow)
+        follow_actions.addStretch()
+        score_layout.addLayout(follow_actions)
+        follow_hint = QLabel("按对当前组再翻谱；和弦同时按，重复音松开再按。")
+        follow_hint.setObjectName("MutedText")
+        follow_hint.setWordWrap(True)
+        score_layout.addWidget(follow_hint)
+        self.keyboard_input = KeyboardScoreInput(
+            {KEY_TO_SCANCODE[label]: index for index, label in enumerate(KEY_LABELS)}, self)
+        self.keyboard_input.keys_changed.connect(self.feed_game_keyboard)
         root.addWidget(self.score_panel)
         self.score_panel.setVisible(self.score_button.isChecked())
         self.score_timer = QTimer(self)
@@ -625,7 +645,7 @@ class FloatingControl(QWidget):
         status_row.addWidget(self.request_btn)
         root.addLayout(status_row)
         self.setMinimumSize(340, 188)
-        self.resize(400, 540 if self.score_button.isChecked() else 240)
+        self.resize(400, 580 if self.score_button.isChecked() else 240)
         self.refresh()
 
     def toggle_score(self):
@@ -633,7 +653,8 @@ class FloatingControl(QWidget):
         self.score_panel.setVisible(visible)
         if not visible:
             self.stop_score_scroll()
-        self.resize(max(400, self.width()), 540 if visible else 240)
+            self.stop_keyboard_follow()
+        self.resize(max(400, self.width()), 580 if visible else 240)
         self.main.save_config()
 
     def set_input_locked(self, locked):
@@ -644,16 +665,21 @@ class FloatingControl(QWidget):
         visible = self.isVisible()
         remaining = self.score_timer.remainingTime()
         self.lock_button.setChecked(bool(locked))
-        self.setWindowFlag(Qt.WindowTransparentForInput, bool(locked))
-        self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, bool(locked))
-        if visible:
-            self.show()
-            if remaining >= 0:
-                self.auto_score_button.setChecked(True)
-                self.score_timer.start(max(1, remaining))
+        self._changing_window_flags = True
+        try:
+            self.setWindowFlag(Qt.WindowTransparentForInput, bool(locked))
+            self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, bool(locked))
+            if visible:
+                self.show()
+                if remaining >= 0:
+                    self.auto_score_button.setChecked(True)
+                    self.score_timer.start(max(1, remaining))
+        finally:
+            self._changing_window_flags = False
 
     def set_score(self, notes_by_time):
         self.stop_score_scroll()
+        self.stop_keyboard_follow()
         self.score_view.cursor.set_score(notes_by_time)
         self.score_view.cursor.held.clear()
         self.score_view.update()
@@ -679,6 +705,7 @@ class FloatingControl(QWidget):
         if self.main.previewing or (self.main.player_thread and self.main.player_thread.is_alive()):
             self.main.stop_play()
         self.auto_score_button.setChecked(True)
+        self.stop_keyboard_follow()
         self.midi_follow.setChecked(False)
         cursor = self.score_view.cursor
         if not cursor.groups:
@@ -715,8 +742,75 @@ class FloatingControl(QWidget):
             self.score_view.cursor.feed(keys)
             self.score_view.update()
 
+    def toggle_midi_follow(self, enabled):
+        if enabled:
+            self.stop_score_scroll()
+            self.stop_keyboard_follow()
+        self.score_view.cursor.reset_input()
+
+    def toggle_keyboard_follow(self, enabled):
+        if not enabled:
+            self.keyboard_input.stop()
+            self.score_view.cursor.reset_input()
+            return
+        if not self.isVisible() or not self.score_button.isChecked() or not self.score_view.cursor.groups:
+            self.keyboard_follow.setChecked(False)
+            self.status_label.setText("请先打开悬浮琴谱并选择曲谱")
+            return
+        if self.main.previewing or self.main.playback_session or (self.main.player_thread and self.main.player_thread.is_alive()):
+            self.main.stop_play()
+            with QSignalBlocker(self.keyboard_follow):
+                self.keyboard_follow.setChecked(True)
+        self.stop_score_scroll()
+        self.midi_follow.setChecked(False)
+        self.main.midi_game.stop()
+        try:
+            self.keyboard_input.start()
+        except Exception as exc:
+            self.keyboard_follow.setChecked(False)
+            self.status_label.setText(f"键盘跟谱无法开启：{exc}")
+            return
+        cursor = self.score_view.cursor
+        if cursor.index >= len(cursor.groups):
+            cursor.seek(0)
+        cursor.reset_input(self.keyboard_input.keys)
+        self.score_view.update()
+        self.status_label.setText("键盘跟谱中 · 按对当前组后自动翻谱")
+
+    def stop_keyboard_follow(self):
+        self.keyboard_follow.setChecked(False)
+
+    def feed_game_keyboard(self, keys, modified=False):
+        if not self.keyboard_follow.isChecked() or not self.isVisible() or not self.score_button.isChecked():
+            return
+        cursor = self.score_view.cursor
+        if modified or not self.keyboard_follow_input_allowed():
+            cursor.reset_input(keys)
+            return
+        if cursor.feed(keys):
+            self.score_view.update()
+            if cursor.index >= len(cursor.groups):
+                self.stop_keyboard_follow()
+                self.status_label.setText("跟谱完成 · 可重新勾选键盘跟谱")
+
+    def keyboard_follow_input_allowed(self):
+        if QApplication.activeModalWidget():
+            return False
+        if QApplication.applicationState() != Qt.ApplicationActive:
+            return True
+        if self.main.pages.currentWidget() is self.main.score_editor:
+            return False
+        focus = QApplication.focusWidget()
+        while focus is not None:
+            if isinstance(focus, (QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit, QTextEdit)):
+                return False
+            focus = focus.parentWidget()
+        return True
+
     def hideEvent(self, event):
         self.stop_score_scroll()
+        if not self._changing_window_flags:
+            self.stop_keyboard_follow()
         super().hideEvent(event)
 
     def refresh(self):
@@ -2304,17 +2398,19 @@ class MainWindow(QMainWindow):
         self.game_open_score = QPushButton("打开悬浮琴谱")
         self.game_open_score.setObjectName("PrimaryButton")
         self.game_open_score.clicked.connect(self.show_score_overlay)
+        self.game_follow_score = QPushButton("键盘跟谱")
+        self.game_follow_score.clicked.connect(self.start_keyboard_score_follow)
         self.game_hide_score = QPushButton("隐藏悬浮窗")
         self.game_hide_score.clicked.connect(lambda: self.overlay.isVisible() and self.toggle_overlay())
-        for button in (self.game_choose_song, self.game_open_score, self.game_hide_score):
+        for button in (self.game_choose_song, self.game_open_score, self.game_follow_score, self.game_hide_score):
             actions.addWidget(button)
         actions.addStretch()
         layout.addLayout(actions)
-        copy = QLabel("切回光遇后，按亮起的 15 键提示弹奏。悬浮窗可拖动，也可调整透明度。")
+        copy = QLabel("点“键盘跟谱”后切回光遇，按对亮起的音符组就自动翻谱；和弦同时按住，重复音松开再按。悬浮窗可拖动，也可调整透明度。")
         copy.setObjectName("MutedText")
         copy.setWordWrap(True)
         layout.addWidget(copy)
-        shortcuts = QLabel("F3 显示 / 隐藏　　F4 鼠标穿透\nF5 / F6 翻谱　　F7 开始翻谱　　F9 自动翻谱\nF8 / Esc 停止")
+        shortcuts = QLabel("F3 显示 / 隐藏　　F4 鼠标穿透\nF5 / F6 翻谱　　F7 开始定时翻谱　　F9 定时翻谱\nF8 / Esc 停止")
         shortcuts.setObjectName("MutedText")
         shortcuts.setWordWrap(True)
         layout.addWidget(shortcuts)
@@ -2354,6 +2450,11 @@ class MainWindow(QMainWindow):
             self.toggle_overlay()
         else:
             self.show_score_overlay()
+
+    def start_keyboard_score_follow(self):
+        self.show_score_overlay()
+        if self.overlay.isVisible():
+            self.overlay.keyboard_follow.setChecked(True)
 
     def update_game_score(self):
         self.game_song_label.setText(self.name_label.text() if self.selected_file else "未选择曲谱")
@@ -2653,7 +2754,8 @@ class MainWindow(QMainWindow):
                 self.midi_game.start()
             elif self.game_tabs.currentIndex() == 0:
                 self.show_score_overlay()
-                if self.overlay.isVisible() and not self.overlay.auto_score_button.isChecked():
+                if (self.overlay.isVisible() and not self.overlay.auto_score_button.isChecked()
+                        and not self.overlay.keyboard_follow.isChecked() and not self.overlay.midi_follow.isChecked()):
                     self.overlay.auto_score_button.click()
             else:
                 self.set_status("请在手机端选择曲谱并开始演奏")
@@ -3837,6 +3939,7 @@ class MainWindow(QMainWindow):
             return
         self.midi_game.stop()
         self.overlay.stop_score_scroll()
+        self.overlay.stop_keyboard_follow()
         self.midi_practice.stop_practice()
         section = self.section_combo.currentData()
         start = bisect_left(self.sorted_times, section.start_ms) if section else 0
@@ -3877,6 +3980,7 @@ class MainWindow(QMainWindow):
         if self.midi_game:
             self.midi_game.stop()
         self.overlay.stop_score_scroll()
+        self.overlay.stop_keyboard_follow()
         self.playback_generation += 1
         self.stop_event.set()
         if self.playback_session:

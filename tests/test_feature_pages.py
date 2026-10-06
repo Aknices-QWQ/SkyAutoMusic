@@ -4,6 +4,7 @@ import threading
 from contextlib import ExitStack
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -283,6 +284,137 @@ class FeaturePagesTests(unittest.TestCase):
         window.signals.overlay_lock_requested.emit()
         self.assertFalse(overlay.windowFlags() & Qt.WindowTransparentForInput)
         self.assertTrue(overlay.score_timer.isActive())
+
+    def configure_keyboard_follow(self, notes=None):
+        overlay = self.window.overlay
+        self.keyboard_remove = Mock()
+        self.keyboard_hook = self.stack.enter_context(patch("keyboard.hook", return_value=self.keyboard_remove))
+        self.stack.enter_context(patch("keyboard.is_pressed", return_value=False))
+        self.keyboard_app_state = self.stack.enter_context(
+            patch.object(QApplication, "applicationState", return_value=Qt.ApplicationInactive))
+        overlay.set_score(notes or {0: ["1Key0"], 100: ["1Key0"], 200: ["1Key9", "1Key14"]})
+        self.window.start_keyboard_score_follow()
+        self.assertTrue(overlay.keyboard_follow.isChecked())
+        return overlay
+
+    def keyboard_event(self, label, pressed=True, process=True):
+        callback = self.keyboard_hook.call_args.args[0]
+        callback(SimpleNamespace(scan_code=app.KEY_TO_SCANCODE[label], event_type="down" if pressed else "up"))
+        if process:
+            self.app.processEvents()
+
+    def test_keyboard_follow_waits_for_correct_strikes_and_chords_without_sending_keys(self):
+        overlay = self.configure_keyboard_follow()
+        cursor = overlay.score_view.cursor
+        with patch.object(app, "send_scan_key") as send:
+            self.keyboard_event("I")
+            self.assertEqual(cursor.index, 0)
+            self.keyboard_event("I", False)
+            self.keyboard_event("Y")
+            self.assertEqual(cursor.index, 1)
+            self.keyboard_event("Y")
+            self.assertEqual(cursor.index, 1)
+            self.keyboard_event("Y", False)
+            self.keyboard_event("Y")
+            self.assertEqual(cursor.index, 2)
+            self.keyboard_event("Y", False)
+            self.keyboard_event(";")
+            self.assertEqual(cursor.index, 2)
+            self.keyboard_event("/")
+            self.assertEqual(cursor.index, 3)
+            self.assertFalse(overlay.keyboard_follow.isChecked())
+            self.keyboard_remove.assert_called_once()
+            send.assert_not_called()
+        self.assertIn("跟谱完成", overlay.status_label.text())
+        overlay.keyboard_follow.setChecked(True)
+        self.assertEqual(cursor.index, 0)
+
+    def test_keyboard_follow_survives_clickthrough_and_f7_keeps_follow_mode(self):
+        overlay = self.configure_keyboard_follow()
+        self.window.global_hotkeys_registered = True
+        self.window.nav_game.click()
+        self.window.signals.overlay_lock_requested.emit()
+        self.assertTrue(overlay.keyboard_follow.isChecked())
+        self.assertTrue(overlay.windowFlags() & Qt.WindowTransparentForInput)
+        self.keyboard_event("Y")
+        self.assertEqual(overlay.score_view.cursor.index, 1)
+        self.window.signals.start_requested.emit()
+        self.assertTrue(overlay.keyboard_follow.isChecked())
+        self.assertFalse(overlay.score_timer.isActive())
+        self.assertFalse(overlay.windowFlags() & Qt.WindowTransparentForInput)
+
+    def test_keyboard_follow_stops_for_escape_hide_collapse_and_song_change(self):
+        overlay = self.configure_keyboard_follow()
+        actions = (self.window.force_stop, overlay.hide,
+                   lambda: (overlay.score_button.setChecked(False), overlay.toggle_score()),
+                   lambda: self.window.select_file("B.json"))
+        for action in actions:
+            with self.subTest(action=action):
+                self.window.start_keyboard_score_follow()
+                cursor = overlay.score_view.cursor
+                index = cursor.index
+                self.keyboard_event("Y", process=False)
+                action()
+                index = cursor.index if action == actions[-1] else index
+                self.app.processEvents()
+                self.assertFalse(overlay.keyboard_follow.isChecked())
+                self.assertEqual(cursor.index, index)
+                self.assertFalse(overlay.keyboard_input.held)
+
+    def test_keyboard_follow_and_midi_or_timed_modes_are_exclusive(self):
+        overlay = self.configure_keyboard_follow()
+        overlay.midi_follow.setChecked(True)
+        self.assertFalse(overlay.keyboard_follow.isChecked())
+        overlay.keyboard_follow.setChecked(True)
+        self.assertFalse(overlay.midi_follow.isChecked())
+        overlay.auto_score_button.click()
+        self.assertTrue(overlay.score_timer.isActive())
+        self.assertFalse(overlay.keyboard_follow.isChecked())
+        overlay.keyboard_follow.setChecked(True)
+        self.assertFalse(overlay.score_timer.isActive())
+        self.assertFalse(overlay.auto_score_button.isChecked())
+
+    def test_keyboard_follow_ignores_typing_shortcuts_and_compose_input(self):
+        overlay = self.configure_keyboard_follow()
+        cursor = overlay.score_view.cursor
+        self.keyboard_app_state.return_value = Qt.ApplicationActive
+        with patch.object(QApplication, "focusWidget", return_value=overlay.song.lineEdit()):
+            self.keyboard_event("Y")
+            self.keyboard_event("Y", False)
+        self.assertEqual(cursor.index, 0)
+        self.window.nav_compose.click()
+        with patch.object(QApplication, "focusWidget", return_value=self.window.score_editor.note_buttons[0]):
+            self.keyboard_event("Y")
+            self.keyboard_event("Y", False)
+        self.assertEqual(cursor.index, 0)
+        self.window.nav_game.click()
+        overlay.feed_game_keyboard(["1Key0"], modified=True)
+        overlay.feed_game_keyboard([])
+        self.assertEqual(cursor.index, 0)
+        self.keyboard_app_state.return_value = Qt.ApplicationInactive
+        self.keyboard_event("Y")
+        self.assertEqual(cursor.index, 1)
+
+    def test_keyboard_listener_failure_leaves_follow_off_and_shows_reason(self):
+        overlay = self.configure_keyboard_follow()
+        overlay.keyboard_follow.setChecked(False)
+        self.keyboard_hook.side_effect = RuntimeError("测试监听失败")
+        overlay.keyboard_follow.setChecked(True)
+        self.assertFalse(overlay.keyboard_follow.isChecked())
+        self.assertIn("测试监听失败", overlay.status_label.text())
+
+    def test_preview_stops_keyboard_follow_and_follow_stops_an_active_preview(self):
+        overlay = self.configure_keyboard_follow()
+        worker = Mock()
+        worker.is_alive.return_value = False
+        with patch.object(app.threading, "Thread", return_value=worker):
+            self.window.start_playback(preview=True)
+            self.assertFalse(overlay.keyboard_follow.isChecked())
+            self.assertTrue(self.window.previewing)
+            overlay.keyboard_follow.setChecked(True)
+            self.assertFalse(self.window.previewing)
+            self.assertIsNone(self.window.playback_session)
+            self.assertTrue(overlay.keyboard_follow.isChecked())
 
     def test_game_midi_follows_fast_notes_and_escape_releases_keys(self):
         window = self.window

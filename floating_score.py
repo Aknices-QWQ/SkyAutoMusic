@@ -2,12 +2,14 @@
 
 import re
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QObject, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 KEY_LABELS = ("Y", "U", "I", "O", "P", "H", "J", "K", "L", ";", "N", "M", ",", ".", "/")
 SOLFEGE = ("1", "2", "3", "4", "5", "6", "7", "1·", "2·", "3·", "4·", "5·", "6·", "7·", "1··")
+# Windows Ctrl / Alt / Win keys, including the extended codes used by keyboard.
+MODIFIER_SCAN_CODES = frozenset((0x1D, 0xE01D, 0xE11D, 0x38, 0xE038, 0x5B, 0xE05B, 0x5C, 0xE05C))
 
 
 class ScoreCursor:
@@ -39,15 +41,25 @@ class ScoreCursor:
         self.index = max(0, min(int(index), len(self.groups)))
         self.fresh.clear()
 
+    def reset_input(self, keys=()):
+        """Treat already-held keys as old strikes when following starts or resumes."""
+        self.held = self.key_indices(keys)
+        self.fresh.clear()
+
     def move(self, step):
         self.seek(self.index + step)
 
-    def feed(self, keys):
+    @staticmethod
+    def key_indices(keys):
         held = set()
         for key in keys:
             match = re.fullmatch(r"[12]Key(\d+)", str(key))
             if match and 0 <= int(match[1]) < 15:
                 held.add(int(match[1]))
+        return held
+
+    def feed(self, keys):
+        held = self.key_indices(keys)
         self.fresh.intersection_update(held)
         self.fresh.update(held - self.held)
         self.held = held
@@ -56,6 +68,69 @@ class ScoreCursor:
             self.fresh.clear()
             return True
         return False
+
+
+class KeyboardScoreInput(QObject):
+    """Deliver every global key transition on the Qt thread, without swallowing keys."""
+
+    keys_changed = Signal(list, bool)
+    _key_event = Signal(int, int, bool, bool)
+
+    def __init__(self, scan_codes, parent=None):
+        super().__init__(parent)
+        self.scan_codes = dict(scan_codes)
+        self.held = set()
+        self._generation = 0
+        self._remove_hook = None
+        self._key_event.connect(self.receive_key, Qt.QueuedConnection)
+
+    @property
+    def keys(self):
+        return [f"1Key{i}" for i in sorted(self.held)]
+
+    def start(self):
+        self.stop()
+        import keyboard
+
+        generation = self._generation
+        modifiers = {scan for scan in MODIFIER_SCAN_CODES if keyboard.is_pressed(scan)}
+
+        def on_event(event):
+            if event.event_type not in ("down", "up"):
+                return
+            if event.scan_code in MODIFIER_SCAN_CODES:
+                if event.event_type == "down":
+                    modifiers.add(event.scan_code)
+                else:
+                    modifiers.discard(event.scan_code)
+                return
+            index = self.scan_codes.get(event.scan_code)
+            if index is None:
+                return
+            self._key_event.emit(generation, index, event.event_type == "down", bool(modifiers))
+
+        self._remove_hook = keyboard.hook(on_event, suppress=False)
+        self.held = {index for scan, index in self.scan_codes.items() if keyboard.is_pressed(scan)}
+
+    def stop(self):
+        self._generation += 1
+        remove, self._remove_hook = self._remove_hook, None
+        self.held.clear()
+        if remove is not None:
+            remove()
+
+    def receive_key(self, generation, index, pressed, modified):
+        if generation != self._generation or self._remove_hook is None:
+            return
+        if pressed:
+            if index in self.held:
+                return  # Windows key repeat is not a fresh strike.
+            self.held.add(index)
+        else:
+            if index not in self.held:
+                return
+            self.held.remove(index)
+        self.keys_changed.emit(self.keys, modified)
 
 
 class FloatingScoreView(QWidget):
