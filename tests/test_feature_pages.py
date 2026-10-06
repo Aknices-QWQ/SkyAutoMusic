@@ -285,6 +285,38 @@ class FeaturePagesTests(unittest.TestCase):
         self.assertFalse(overlay.windowFlags() & Qt.WindowTransparentForInput)
         self.assertTrue(overlay.score_timer.isActive())
 
+    def test_collapsing_score_keeps_overlay_compact_after_pending_resizes(self):
+        overlay = self.window.overlay
+        self.window.show_score_overlay()
+        self.app.processEvents()
+        expanded_height = overlay.height()
+        width, position = overlay.width(), overlay.pos()
+        overlay.score_button.click()
+        self.assertTrue(overlay.score_panel.isHidden())
+        # Reproduce a late resize using Windows' previous expanded size limits.
+        overlay.resize(width, expanded_height)
+        self.app.processEvents()
+        collapsed_height = overlay.height()
+        self.assertLess(collapsed_height, expanded_height)
+        self.assertEqual(collapsed_height, max(240, overlay.minimumSizeHint().height()))
+        self.assertEqual(overlay.width(), width)
+        self.assertEqual(overlay.pos(), position)
+        self.assertTrue(overlay.score_button.isVisible())
+        self.assertTrue(overlay.status_label.isVisible())
+        overlay.hide()
+        overlay.show()
+        self.app.processEvents()
+        self.assertEqual(overlay.height(), collapsed_height)
+        for _ in range(3):
+            overlay.score_button.click()
+            self.app.processEvents()
+            self.assertFalse(overlay.score_panel.isHidden())
+            self.assertGreater(overlay.height(), collapsed_height)
+            self.assertGreaterEqual(overlay.score_view.height(), overlay.score_view.minimumHeight())
+            overlay.score_button.click()
+            self.app.processEvents()
+            self.assertEqual(overlay.height(), collapsed_height)
+
     def configure_keyboard_follow(self, notes=None):
         overlay = self.window.overlay
         self.keyboard_remove = Mock()

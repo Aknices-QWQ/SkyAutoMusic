@@ -645,7 +645,8 @@ class FloatingControl(QWidget):
         status_row.addWidget(self.request_btn)
         root.addLayout(status_row)
         self.setMinimumSize(340, 188)
-        self.resize(400, 580 if self.score_button.isChecked() else 240)
+        self.resize(400, 240)
+        self.resize_for_score()
         self.refresh()
 
     def toggle_score(self):
@@ -654,8 +655,18 @@ class FloatingControl(QWidget):
         if not visible:
             self.stop_score_scroll()
             self.stop_keyboard_follow()
-        self.resize(max(400, self.width()), 580 if visible else 240)
+        self.resize_for_score()
         self.main.save_config()
+
+    def resize_for_score(self):
+        # Recalculate both layouts before Windows queries the new size limits.
+        # A pending native resize can otherwise restore the expanded height.
+        self.score_panel.parentWidget().layout().activate()
+        self.layout().activate()
+        height = max(580 if self.score_button.isChecked() else 240,
+                     self.minimumSizeHint().height())
+        self.setFixedHeight(height)
+        self.resize(max(400, self.width()), height)
 
     def set_input_locked(self, locked):
         if locked and not getattr(self.main, "global_hotkeys_registered", False):
