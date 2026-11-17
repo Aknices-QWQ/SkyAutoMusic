@@ -1,26 +1,26 @@
 {
   "app": {
-    "version": "1.0.13",
-    "released_at": "2026-10-01",
-    "release_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/tag/v1.0.13",
+    "version": "1.0.16",
+    "released_at": "2026-11-17",
+    "release_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/tag/v1.0.16",
     "repository": "https://github.com/Aknices-QWQ/SkyAutoMusic",
     "lite": {
-      "name": "SkyAutoMusic-v1.0.13-Lite-Setup.exe",
-      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.13/SkyAutoMusic-v1.0.13-Lite-Setup.exe",
-      "size": 82429592,
-      "sha256": "d28555e1d0ff9b2d4326b6c4f786b4ff04a1cc67eda79be5e7c75e98b1ea377a",
+      "name": "SkyAutoMusic-v1.0.16-Lite-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.16/SkyAutoMusic-v1.0.16-Lite-Setup.exe",
+      "size": 87115028,
+      "sha256": "668c09b1c427730336160998ebd4e176623b7719824529e1cf489b4e527a86ae",
       "sheet_count": 2
     },
     "full": {
-      "name": "SkyAutoMusic-v1.0.13-Full-Setup.exe",
-      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.13/SkyAutoMusic-v1.0.13-Full-Setup.exe",
-      "size": 119495225,
-      "sha256": "92ed0c329e9fe326b3031cef83baeef75b3ab7fe569f361a56eea336a3819dba",
+      "name": "SkyAutoMusic-v1.0.16-Full-Setup.exe",
+      "asset_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/releases/download/v1.0.16/SkyAutoMusic-v1.0.16-Full-Setup.exe",
+      "size": 124195675,
+      "sha256": "22805b1242dd6c2ba6c19d4b5ba4a0de981434310b3a6a5e60ec88732a52abaf",
       "sheet_count": 18332
     }
   },
   "source": {
-    "version": "1.0.13",
+    "version": "1.0.16",
     "url": "https://github.com/Aknices-QWQ/SkyAutoMusic/tree/main",
     "build_url": "https://github.com/Aknices-QWQ/SkyAutoMusic/actions/workflows/windows-build.yml"
   },
