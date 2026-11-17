@@ -1,5 +1,5 @@
 #define MyAppName "SkyAutoMusic"
-#define MyAppVersion "1.0.15"
+#define MyAppVersion "1.0.16"
 #ifndef Edition
   #define Edition "Lite"
 #endif
@@ -32,8 +32,9 @@ SolidCompression=yes
 WizardStyle=modern
 SetupLogging=yes
 UninstallDisplayIcon={app}\SkyAutoMusic.exe
+SetupIconFile=assets\app-icon.ico
 LicenseFile=LICENSE
-VersionInfoVersion=1.0.15.0
+VersionInfoVersion=1.0.16.0
 VersionInfoCompany=Aknices && BA4KQS
 VersionInfoDescription=SkyAutoMusic {#Edition} Installer
 VersionInfoProductName=SkyAutoMusic
@@ -50,8 +51,8 @@ Source: "{#SourceDir}\config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist u
 Source: "{#SourceDir}\favorites.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
-Name: "{autoprograms}\SkyAutoMusic"; Filename: "{app}\SkyAutoMusic.exe"
-Name: "{autodesktop}\SkyAutoMusic"; Filename: "{app}\SkyAutoMusic.exe"; Tasks: desktopicon
+Name: "{autoprograms}\SkyAutoMusic"; Filename: "{app}\SkyAutoMusic.exe"; IconFilename: "{app}\SkyAutoMusic.exe"
+Name: "{autodesktop}\SkyAutoMusic"; Filename: "{app}\SkyAutoMusic.exe"; IconFilename: "{app}\SkyAutoMusic.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\SkyAutoMusic.exe"; Description: "启动 SkyAutoMusic"; Flags: nowait postinstall skipifsilent

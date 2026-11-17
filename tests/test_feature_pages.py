@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
@@ -40,7 +41,9 @@ class FeaturePagesTests(unittest.TestCase):
             (folder / f"{name}.json").rename(sheets / f"{name}.json")
         for name, value in (("APP_DIR", folder), ("SHEET_MUSIC_DIR", sheets),
                             ("CONFIG_FILE", folder / "config.json"),
-                            ("FAVORITES_FILE", folder / "favorites.json")):
+                            ("FAVORITES_FILE", folder / "favorites.json"),
+                            ("PLAYLISTS_FILE", folder / "playlists.json"),
+                            ("ALBUM_ART_CACHE_DIR", folder / "album-art")):
             self.stack.enter_context(patch.object(app, name, value))
         for method in ("bind_escape_stop", "check_app_update", "save_config", "release_all_keys"):
             self.stack.enter_context(patch.object(app.MainWindow, method))
@@ -54,11 +57,57 @@ class FeaturePagesTests(unittest.TestCase):
         self.assertIs(window.pages.currentWidget(), window.transcribe_page)
         self.assertTrue(window.transcribe_page.isAncestorOf(window.import_midi_files_button))
         self.assertFalse(window.play_page.isAncestorOf(window.import_midi_files_button))
-        self.assertFalse(window.transcribe_search.isWindow())
+        self.assertFalse(window.piastudy_tutorial.isWindow())
+        self.assertFalse(hasattr(window.piastudy_import_panel, "search_box"))
+        self.assertEqual(window.transcribe_tabs.tabText(0), "PiaStudy 扒谱教程")
+        tutorial_images = window.piastudy_tutorial.findChildren(app.PiastudyTutorialImage)
+        self.assertEqual(len(tutorial_images), 3)
+        self.assertTrue(all(not image.source_pixmap.isNull() for image in tutorial_images))
         window.nav_practice.click()
         self.assertIs(window.pages.currentWidget(), window.midi_practice)
         window.nav_play.click()
         self.assertIs(window.pages.currentWidget(), window.play_page)
+
+    def test_playlist_creation_addition_filtering_and_persistence(self):
+        window = self.window
+        self.assertTrue(window.create_playlist_named("通勤"))
+        self.assertTrue(window.add_song_to_playlist("A.json", "通勤"))
+        self.assertEqual(window.display_files, ["A.json"])
+        self.assertEqual(json.loads((self.folder / "playlists.json").read_text(encoding="utf-8")),
+                         {"通勤": ["A.json"]})
+        self.assertEqual(window.playlist_filter.currentData(), "通勤")
+
+    def test_album_art_result_updates_cover_and_ignores_stale_search(self):
+        window = self.window
+        from PySide6.QtGui import QImage
+
+        image_path = self.folder / "cover.png"
+        image = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.cyan)
+        self.assertTrue(image.save(str(image_path), "PNG"))
+        window.selected_file = "A.json"
+        window.meta = {"songName": "Blue Bird", "artist": "Ikimono-gakari"}
+
+        launched = {}
+
+        class ImmediateThread:
+            def __init__(self, *, target, **_kwargs):
+                self.target = target
+
+            def start(self):
+                launched["target"] = self.target
+                self.target()
+
+        result = {"image_path": str(image_path), "album": "My Song", "artist": "Ikimono-gakari", "score": 1.0}
+        with patch.object(app.album_art, "find_album_art", return_value=result) as find_art, \
+                patch.object(app.threading, "Thread", ImmediateThread):
+            window.refresh_selected_album_art()
+
+        find_art.assert_called_once_with("Blue Bird", "Ikimono-gakari", app.ALBUM_ART_CACHE_DIR, force=False)
+        self.assertIn("My Song", window.album_cover_status.text())
+        self.assertFalse(window.album_cover_label.pixmap().isNull())
+        window.on_album_art_finished(0, None, "old result")
+        self.assertIn("My Song", window.album_cover_status.text())
 
     def load_long_score(self):
         notes = [{"time": index, "key": f"1Key{index % 15}"} for index in range(200)]
@@ -105,6 +154,54 @@ class FeaturePagesTests(unittest.TestCase):
             window.stop_play()
             window.start_play()
             self.assertEqual(window.playback_session.countdown, 3)
+
+    def test_immediate_play_shortcut_registers_globally_and_starts_without_countdown(self):
+        window = self.window
+        window.global_hotkeys_registered = True
+        with patch("keyboard.add_hotkey", side_effect=("new-handle", "next-handle")) as register, \
+                patch("keyboard.remove_hotkey") as remove:
+            window.immediate_play_hotkey_edit.setKeySequence(QKeySequence("Ctrl+Shift+F10"))
+            self.assertEqual(window.config["immediate_play_hotkey"], "Ctrl+Shift+F10")
+            self.assertEqual(register.call_args.args[0], "ctrl+shift+f10")
+            self.assertFalse(register.call_args.kwargs["suppress"])
+            callback = register.call_args.args[1]
+            with patch.object(window, "start_play") as start:
+                callback()
+                self.assertEqual(start.call_count, 1)
+                self.assertEqual(start.call_args.kwargs, {"immediate": True})
+
+            window.immediate_play_hotkey_edit.setKeySequence(QKeySequence("Alt+F11"))
+            remove.assert_called_once_with("new-handle")
+            self.assertEqual(register.call_args.args[0], "alt+f11")
+            self.assertEqual(window.immediate_play_hotkey_status.text(), "全局快捷键已绑定：Alt+F11")
+            _SAVE_CONFIG(window)
+            persisted = json.loads((self.folder / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["immediate_play_hotkey"], "Alt+F11")
+
+    def test_immediate_play_shortcut_rejects_conflicts_and_can_be_cleared(self):
+        window = self.window
+        original = window.immediate_play_hotkey_edit.keySequence()
+        window.immediate_play_hotkey_edit.setKeySequence(QKeySequence("F7"))
+        self.assertEqual(window.immediate_play_hotkey_edit.keySequence(), original)
+        self.assertEqual(window.immediate_play_hotkey_status.text(), "该按键已用于现有功能")
+
+        window.global_hotkeys_registered = True
+        with patch("keyboard.add_hotkey") as register:
+            window.immediate_play_hotkey_edit.setKeySequence(QKeySequence())
+            self.assertEqual(window.config["immediate_play_hotkey"], "")
+            self.assertEqual(window.immediate_play_hotkey_display.text(), "未设置")
+            self.assertEqual(window.immediate_play_hotkey_status.text(), "立即播放快捷键已禁用。")
+            register.assert_not_called()
+
+    def test_immediate_play_shortcut_falls_back_to_application_shortcut(self):
+        window = self.window
+        window.global_hotkeys_registered = False
+        window._register_immediate_play_hotkey()
+        self.assertIsNotNone(window.immediate_play_shortcut)
+        self.assertEqual(window.immediate_play_hotkey_status.text(), "快捷键仅在程序前台有效：Ctrl+F10")
+        with patch.object(window, "start_play") as start:
+            window.immediate_play_shortcut.activated.emit()
+            start.assert_called_once_with(immediate=True)
 
     def test_old_worker_events_and_finish_cannot_change_new_song_or_playback(self):
         window = self.load_long_score()
@@ -499,7 +596,7 @@ class FeaturePagesTests(unittest.TestCase):
     def test_realtime_result_opens_score_and_stops_listening(self):
         window = self.window
         page = window.realtime_recognition
-        self.assertEqual(window.transcribe_tabs.tabText(3), "实时识曲")
+        self.assertEqual(window.transcribe_tabs.tabText(window.transcribe_tabs.indexOf(page)), "实时识曲")
         self.assertFalse(page.recognizer.running)
         page.on_results([{"filename": "B.json", "title": "B", "score": 0.95}])
         with patch.object(page, "stop_listening") as stop:
@@ -547,7 +644,7 @@ class FeaturePagesTests(unittest.TestCase):
     def test_import_completion_keeps_selection_and_status_on_import_page(self):
         window = self.window
         window.show_transcribe()
-        window.transcribe_tabs.setCurrentIndex(1)
+        window.transcribe_tabs.setCurrentIndex(2)
         window.on_midi_convert_done({"song_name": "B", "filename": "B.json"}, "")
         self.assertEqual(window.selected_file, "A.json")
         self.assertEqual(window.import_progress.value(), 100)
@@ -565,20 +662,40 @@ class FeaturePagesTests(unittest.TestCase):
             window.signals.start_requested.emit()
             play.assert_called_once()
 
-    def test_piastudy_result_keeps_embedded_search_open(self):
+    def test_piastudy_search_opens_external_site_and_import_stays_available(self):
         window = self.window
-        window.open_piastudy_search("test query")
-        window.transcribe_search._on_convert_done({"song_name": "测试"}, "")
+        with patch.object(app.QDesktopServices, "openUrl", return_value=True) as open_url, \
+                patch.object(app.piastudy, "search") as internal_search:
+            window.open_piastudy_search("test query")
+        self.assertIs(window.transcribe_tabs.currentWidget(), window.piastudy_tutorial)
+        self.assertIn("test query", window.piastudy_tutorial.search_hint_label.text())
+        open_url.assert_called_once()
+        self.assertIn("/searchResults/1/", open_url.call_args.args[0].toString())
+        internal_search.assert_not_called()
+        window.piastudy_import_panel._on_convert_done({"song_name": "测试"}, "")
         self.assertIs(window.pages.currentWidget(), window.transcribe_page)
-        self.assertEqual(window.transcribe_search.status_label.text(), "已添加：测试")
-        self.assertEqual(window.transcribe_search.search_box.text(), "test query")
+        self.assertEqual(window.piastudy_import_panel.status_label.text(), "已添加：测试")
+
+        window.piastudy_tutorial.set_search_query("")
+        with patch.object(app.QDesktopServices, "openUrl", return_value=True) as open_url:
+            window.piastudy_tutorial.open_website_btn.click()
+        self.assertEqual(open_url.call_args.args[0].toString(), app.PIASTUDY_SEARCH_URL)
 
     def test_piastudy_detail_url_opens_link_import(self):
         window = self.window
         page_url = "https://piastudy.com/Intermediate/1LoVrqGKT"
         window.open_piastudy_search(page_url)
-        self.assertEqual(window.transcribe_search.url_box.text(), page_url)
-        self.assertEqual(window.transcribe_search.search_box.text(), "")
+        self.assertIs(window.transcribe_tabs.currentWidget(), window.piastudy_import_panel)
+        self.assertEqual(window.piastudy_import_panel.url_box.text(), page_url)
+
+    def test_piastudy_search_results_link_opens_browser_instead_of_import(self):
+        window = self.window
+        search_url = "https://piastudy.com/searchResults/1/浴室"
+        with patch.object(app.QDesktopServices, "openUrl", return_value=True) as open_url:
+            window.open_piastudy_search(search_url)
+        self.assertIs(window.transcribe_tabs.currentWidget(), window.piastudy_tutorial)
+        self.assertEqual(open_url.call_args.args[0].path(), "/searchResults/1/浴室")
+        self.assertEqual(window.piastudy_import_panel.url_box.text(), "")
 
     def test_sky_sound_selection_syncs_compose_and_settings(self):
         window = self.window

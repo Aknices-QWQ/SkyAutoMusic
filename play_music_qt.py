@@ -15,7 +15,7 @@ from bisect import bisect_left
 from collections import defaultdict
 from ctypes import wintypes
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from PySide6.QtCore import QFile, QObject, QSignalBlocker, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QCursor, QDesktopServices, QIcon, QPainter, QPixmap, QShortcut, QKeySequence
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -67,6 +68,7 @@ from sheet_updater import (
 )
 
 import piastudy
+import album_art
 from app_updater import APP_VERSION, compare_versions, fetch_latest_release
 from midi_practice import MidiPracticePage
 from midi_sky import MidiSkyPanel
@@ -82,6 +84,13 @@ from sky_sounds import (
     instrument_folders, pitch_semitones, pitched_wave, sample_files,
 )
 from realtime_recognizer import RealtimeRecognizer, list_loopback_devices
+from playlists import (
+    create_playlist as create_playlist_data,
+    load_playlists,
+    rename_playlist as rename_playlist_data,
+    save_playlists,
+    set_song_membership,
+)
 
 
 def executable_path():
@@ -120,9 +129,13 @@ SHEET_MUSIC_DIR = APP_DIR / "Sheet Music"
 ASSET_DIR = APP_DIR / "assets"
 CONFIG_FILE = APP_DIR / "config.json"
 FAVORITES_FILE = APP_DIR / "favorites.json"
+LOCAL_APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / ".local" / "share")) / "SkyAutoMusic"
+PLAYLISTS_FILE = LOCAL_APP_DATA_DIR / "playlists.json"
+ALBUM_ART_CACHE_DIR = LOCAL_APP_DATA_DIR / "album-art"
 SHEET_MUSIC_DIR.mkdir(exist_ok=True)
 
 PROJECT_SITE = "https://sky.xxlab.dev/"
+PIASTUDY_SEARCH_URL = "https://piastudy.com/searchResults/"
 
 
 def clean_song_name(text):
@@ -243,6 +256,30 @@ KEY_TO_SCANCODE = {
 }
 SKY_MAJOR = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 23, 24]
 
+
+def immediate_play_hotkey_name(sequence):
+    """Translate one safe Qt shortcut into the global ``keyboard`` syntax."""
+    sequence = sequence if isinstance(sequence, QKeySequence) else QKeySequence(sequence)
+    text = sequence.toString(QKeySequence.PortableText).strip()
+    if not text:
+        return ""
+    if sequence.count() != 1:
+        raise ValueError("只能设置一个按键组合")
+
+    parts = [part.strip().lower() for part in text.split("+")]
+    aliases = {"ctrl": "ctrl", "alt": "alt", "shift": "shift", "meta": "windows"}
+    modifiers = [aliases[part] for part in parts[:-1] if part in aliases]
+    if len(modifiers) != len(parts) - 1 or len(set(modifiers)) != len(modifiers):
+        raise ValueError("快捷键格式无效")
+    key = parts[-1]
+    if key in {"esc", "escape"} or (not modifiers and key in {"f3", "f4", "f5", "f6", "f7", "f8", "f9"}):
+        raise ValueError("该按键已用于现有功能")
+    if not modifiers and not re.fullmatch(r"f(?:[1-9]|1[0-9]|2[0-4])", key):
+        raise ValueError("请使用组合键或未占用的功能键，避免与光遇琴键冲突")
+
+    key_aliases = {",": "comma", ";": "semicolon", ".": "period", "/": "slash"}
+    return "+".join((*modifiers, key_aliases.get(key, key)))
+
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
 INPUT_KEYBOARD = 1
@@ -341,6 +378,7 @@ class PlayerSignals(QObject):
     finished = Signal(bool)
     status = Signal(str)
     start_requested = Signal()
+    immediate_play_requested = Signal()
     play_stop_requested = Signal()
     stop_requested = Signal()
     toggle_overlay_requested = Signal()
@@ -1252,46 +1290,213 @@ class RealtimeRecognizerPage(QWidget):
 
 
 class PiastudySignals(QObject):
-    search_done = Signal(list, str)
     convert_done = Signal(dict, str)
     browser_done = Signal(bool, str)
     browser_progress = Signal(str)
 
 
-class PiastudySearchPanel(QWidget):
-    """在 piastudy 上搜索曲谱并一键转换到本地曲库。"""
+class AlbumArtSignals(QObject):
+    finished = Signal(int, object, str)
 
-    def __init__(self, parent, query=""):
+
+class AlbumCoverLabel(QLabel):
+    """Responsive artwork tile with a readable placeholder."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._source_pixmap = QPixmap()
+        self.setObjectName("AlbumCover")
+        self.setAlignment(Qt.AlignCenter)
+        self.setFixedSize(126, 126)
+        self.setAccessibleName("歌曲专辑封面")
+        self.setWordWrap(True)
+        self.show_placeholder("♫")
+
+    def show_placeholder(self, text):
+        self._source_pixmap = QPixmap()
+        self.setPixmap(QPixmap())
+        self.setText(text)
+
+    def set_image(self, path):
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self.show_placeholder("♫")
+            return False
+        self._source_pixmap = pixmap
+        self.setText("")
+        self._update_pixmap()
+        return True
+
+    def _update_pixmap(self):
+        if not self._source_pixmap.isNull():
+            self.setPixmap(self._source_pixmap.scaled(
+                self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
+            ))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_pixmap()
+
+
+class PiastudyTutorialImage(QLabel):
+    """Show a tutorial screenshot scaled to the available panel width."""
+
+    def __init__(self, path, description, parent=None):
+        super().__init__(parent)
+        self.source_pixmap = QPixmap(str(path))
+        self.setObjectName("PiastudyTutorialImage")
+        self.setAccessibleName(description)
+        self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumWidth(0)
+        if self.source_pixmap.isNull():
+            self.setText(f"教程截图无法加载：{description}")
+            self.setMinimumHeight(120)
+        else:
+            self._scale_to_width()
+
+    def _scale_to_width(self):
+        width = max(1, self.contentsRect().width())
+        scaled = self.source_pixmap.scaled(
+            width, 10000, Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
+        self.setFixedHeight(scaled.height() + 8)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self.source_pixmap.isNull():
+            self._scale_to_width()
+
+
+class PiastudyTutorialPage(QWidget):
+    """Show the supplied screenshots for finding and copying a PiaStudy score URL."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(16, 16, 16, 16)
+        content_layout.setSpacing(12)
+
+        chapter_title = QLabel("第一章：查找并导入 PiaStudy 曲谱")
+        chapter_title.setObjectName("CardTitle")
+        content_layout.addWidget(chapter_title)
+        intro = QLabel("程序内搜索暂时关闭。请在 PiaStudy 网站找到曲谱详情页，复制页面链接，再到“链接导入”页粘贴。")
+        intro.setObjectName("MutedText")
+        intro.setWordWrap(True)
+        content_layout.addWidget(intro)
+
+        self.open_website_btn = QPushButton("打开 PiaStudy 搜索页")
+        self.open_website_btn.setObjectName("PrimaryButton")
+        self.open_website_btn.clicked.connect(self.open_website)
+        content_layout.addWidget(self.open_website_btn, 0, Qt.AlignLeft)
+
+        self.search_hint_label = QLabel("")
+        self.search_hint_label.setObjectName("MutedText")
+        self.search_hint_label.setWordWrap(True)
+        self.search_hint_label.hide()
+        content_layout.addWidget(self.search_hint_label)
+
+        tutorial_steps = (
+            (
+                "第 1 步：打开搜索页并搜索歌曲",
+                "在网站搜索歌曲名或艺术家；也可以直接打开你提供的 PiaStudy 搜索页。",
+                "piastudy-search-results.png",
+                "PiaStudy 搜索页示例",
+            ),
+            (
+                "第 2 步：从搜索结果中打开曲谱",
+                "确认曲名和编曲者后，点击对应结果进入曲谱详情页。",
+                "piastudy-select-score.png",
+                "PiaStudy 搜索结果和曲谱条目示例",
+            ),
+            (
+                "第 3 步：复制详情页网址",
+                "复制浏览器地址栏里的曲谱详情页链接，然后粘贴到下方输入框。请复制具体曲谱页面，不要复制搜索结果页。",
+                "piastudy-copy-link.png",
+                "复制 PiaStudy 曲谱详情页链接示例",
+            ),
+        )
+        tutorial_dir = ASSET_DIR / "tutorial"
+        for title_text, body_text, image_name, description in tutorial_steps:
+            card = QFrame()
+            card.setObjectName("HintBox")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setSpacing(6)
+            title = QLabel(title_text)
+            title.setObjectName("CardTitle")
+            body = QLabel(body_text)
+            body.setObjectName("MutedText")
+            body.setWordWrap(True)
+            screenshot = PiastudyTutorialImage(tutorial_dir / image_name, description, card)
+            card_layout.addWidget(title)
+            card_layout.addWidget(body)
+            card_layout.addWidget(screenshot)
+            content_layout.addWidget(card)
+
+        content_layout.addStretch(1)
+        self.scroll_area.setWidget(content)
+        layout.addWidget(self.scroll_area, 1)
+
+    def open_website(self):
+        url = PIASTUDY_SEARCH_URL
+        query = getattr(self, "search_query", "")
+        if query:
+            url += "1/" + quote(query, safe="")
+        if not QDesktopServices.openUrl(QUrl(url)):
+            self.search_hint_label.setText("无法打开浏览器，请手动访问 https://piastudy.com/searchResults/。")
+            self.search_hint_label.show()
+
+    def set_search_query(self, query):
+        query = str(query or "").strip()
+        if query and not query.lower().startswith(("https://piastudy.com/", "http://piastudy.com/", "https://www.piastudy.com/", "http://www.piastudy.com/")):
+            self.search_query = query
+            self.search_hint_label.setText(f"可在 PiaStudy 网页搜索：{query}")
+            self.search_hint_label.show()
+        else:
+            self.search_query = ""
+            self.search_hint_label.clear()
+            self.search_hint_label.hide()
+
+
+class PiastudyImportPanel(QWidget):
+    """Import a PiaStudy score from its detail-page URL."""
+
+    def __init__(self, parent):
         super().__init__(parent)
         self.host = parent
-        self.results = []
         self._thread = None
         self.signals = PiastudySignals()
-        self.signals.search_done.connect(self._on_search_done)
         self.signals.convert_done.connect(self._on_convert_done)
         self.signals.browser_done.connect(self._on_browser_done)
         self.signals.browser_progress.connect(self._on_browser_progress)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-
-        search_row = QHBoxLayout()
-        self.search_box = QLineEdit(query)
-        self.search_box.setPlaceholderText("输入歌名")
-        self.search_box.returnPressed.connect(self.do_search)
-        self.search_btn = QPushButton("搜索")
-        self.search_btn.clicked.connect(self.do_search)
-        search_row.addWidget(self.search_box, 1)
-        search_row.addWidget(self.search_btn)
-        layout.addLayout(search_row)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+        heading = QLabel("粘贴 PiaStudy 曲谱详情页链接")
+        heading.setObjectName("CardTitle")
+        layout.addWidget(heading)
+        help_text = QLabel("请先在 PiaStudy 搜索并打开曲谱详情页，再复制浏览器地址栏里的网址。搜索结果页链接不能用于导入。")
+        help_text.setObjectName("MutedText")
+        help_text.setWordWrap(True)
+        layout.addWidget(help_text)
 
         link_row = QHBoxLayout()
         self.url_box = QLineEdit()
         self.url_box.setPlaceholderText("粘贴 PiaStudy 歌曲详情页链接")
         self.url_box.returnPressed.connect(self.import_from_url)
         self.url_btn = QPushButton("按链接导入")
-        self.url_btn.setToolTip("直接抓取已打开的 PiaStudy 歌曲详情页")
+        self.url_btn.setToolTip("抓取并转换 PiaStudy 歌曲详情页")
+        self.url_btn.setObjectName("PrimaryButton")
         self.url_btn.clicked.connect(self.import_from_url)
         link_row.addWidget(self.url_box, 1)
         link_row.addWidget(self.url_btn)
@@ -1308,7 +1513,6 @@ class PiastudySearchPanel(QWidget):
         browser_row.addStretch()
         browser_row.addWidget(self.browser_download_btn)
         layout.addLayout(browser_row)
-        self._refresh_browser_status()
 
         self.hands_combo = QComboBox()
         self.hands_combo.addItem("纯旋律", True)
@@ -1316,91 +1520,12 @@ class PiastudySearchPanel(QWidget):
         self.hands_combo.setToolTip("转换可能与原曲有差异，可尝试同曲其他版本。")
         layout.addWidget(self.hands_combo)
 
-        self.results_list = QListWidget()
-        self.results_list.itemDoubleClicked.connect(lambda _: self.convert_selected())
-        layout.addWidget(self.results_list, 1)
-
         self.status_label = QLabel("")
         self.status_label.setObjectName("MutedText")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
-
-        buttons = QHBoxLayout()
-        self.convert_btn = QPushButton("转换到曲库")
-        self.convert_btn.clicked.connect(self.convert_selected)
-        self.convert_btn.setEnabled(False)
-        self.request_btn = QPushButton("求谱")
-        self.request_btn.setObjectName("CompactButton")
-        self.request_btn.setToolTip("结果较少时，可提交给项目维护者处理")
-        self.request_btn.clicked.connect(self.request_sheet)
-        self.request_btn.hide()
-        buttons.addStretch()
-        buttons.addWidget(self.request_btn)
-        buttons.addWidget(self.convert_btn)
-        layout.addLayout(buttons)
-
-        if query:
-            QTimer.singleShot(0, self.do_search)
-
-    def do_search(self):
-        query = self.search_box.text().strip()
-        if not query:
-            return
-        if self._thread and self._thread.is_alive():
-            return
-        self.status_label.setText("搜索中…")
-        self.search_btn.setEnabled(False)
-        self.convert_btn.setEnabled(False)
-        self.results_list.clear()
-        self._thread = threading.Thread(target=self._search_worker, args=(query,), daemon=True)
-        self._thread.start()
-
-    def _search_worker(self, query):
-        try:
-            results = piastudy.search(query)
-            self.signals.search_done.emit(results, "")
-        except Exception as exc:
-            self.signals.search_done.emit([], str(exc))
-
-    def _on_search_done(self, results, error):
-        self.search_btn.setEnabled(True)
-        if error:
-            self.status_label.setText(f"搜索失败：{error}")
-            return
-        self.results = results
-        self.results_list.clear()
-        self.request_btn.setVisible(len(results) < 10)
-        for item in results:
-            label = item["title"]
-            meta = " · ".join(x for x in (item["keynote"], item["difficulty"]) if x)
-            if meta:
-                label += f"（{meta}）"
-            list_item = QListWidgetItem(label)
-            list_item.setToolTip(item["page_url"])
-            list_item.setData(Qt.UserRole, item)
-            self.results_list.addItem(list_item)
-        if results:
-            message = f"{len(results)} 个结果"
-            self.status_label.setText(message)
-            self.results_list.setCurrentRow(0)
-            self.convert_btn.setEnabled(True)
-        else:
-            self.status_label.setText("未找到曲谱")
-
-    def request_sheet(self):
-        query = self.search_box.text().strip()
-        if query:
-            self.host.open_sheet_request(query)
-
-    def convert_selected(self):
-        if self._thread and self._thread.is_alive():
-            return
-        item = self.results_list.currentItem()
-        if not item:
-            return
-        info = item.data(Qt.UserRole)
-        melody = bool(self.hands_combo.currentData())
-        self._start_convert(info["page_url"], melody)
+        layout.addStretch(1)
+        self._refresh_browser_status()
 
     def import_from_url(self):
         """直接抓取用户粘贴的 PiaStudy 歌曲详情页链接。"""
@@ -1434,7 +1559,6 @@ class PiastudySearchPanel(QWidget):
             return
         self.browser_download_btn.setEnabled(False)
         self.url_btn.setEnabled(False)
-        self.search_btn.setEnabled(False)
         self.status_label.setText("正在下载 Chromium…")
         self._thread = threading.Thread(target=self._browser_download_worker, daemon=True)
         self._thread.start()
@@ -1450,7 +1574,6 @@ class PiastudySearchPanel(QWidget):
         self.status_label.setText(f"正在下载 Chromium：{text}")
 
     def _on_browser_done(self, success, error):
-        self.search_btn.setEnabled(True)
         self.url_btn.setEnabled(True)
         self._refresh_browser_status()
         if success:
@@ -1460,9 +1583,7 @@ class PiastudySearchPanel(QWidget):
 
     def _start_convert(self, page_url, melody):
         self.status_label.setText("正在抓取并转换…")
-        self.convert_btn.setEnabled(False)
         self.url_btn.setEnabled(False)
-        self.search_btn.setEnabled(False)
         self.browser_download_btn.setEnabled(False)
         use_browser = bool(self.browser_check.isChecked())
         self._thread = threading.Thread(
@@ -1480,16 +1601,13 @@ class PiastudySearchPanel(QWidget):
             self.signals.convert_done.emit({}, str(exc))
 
     def _on_convert_done(self, result, error):
-        self.search_btn.setEnabled(True)
         self.url_btn.setEnabled(True)
         self._refresh_browser_status()
         if error:
             self.status_label.setText(f"转换失败：{error}")
-            self.convert_btn.setEnabled(bool(self.results_list.currentItem()))
             return
         self.status_label.setText(f"已添加：{result.get('song_name')}")
         self.host.refresh_files()
-        self.convert_btn.setEnabled(bool(self.results_list.currentItem()))
 
 
 class MainWindow(QMainWindow):
@@ -1497,6 +1615,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = load_json(CONFIG_FILE, {})
         self.favorites = set(load_json(FAVORITES_FILE, []))
+        self.playlists = load_playlists(PLAYLISTS_FILE)
+        self.album_art_signals = AlbumArtSignals()
+        self.album_art_signals.finished.connect(self.on_album_art_finished)
+        self.album_art_generation = 0
         configured_theme = self.config.get("theme")
         self.theme_confirmed = configured_theme in THEMES
         self.theme_name = configured_theme if self.theme_confirmed else "carbon"
@@ -1535,6 +1657,8 @@ class MainWindow(QMainWindow):
         self.sections_dialog = None
         self.score_signature = ""
         self.global_hotkey_handles = []
+        self.immediate_play_hotkey_handle = None
+        self.immediate_play_shortcut = None
         self.previewing = False
         self._mobile_note_keys = []
         self.preview_cache = {}
@@ -1557,6 +1681,7 @@ class MainWindow(QMainWindow):
         self.signals.status.connect(self.set_status)
         self.signals.playback_event.connect(self.on_playback_event, Qt.QueuedConnection)
         self.signals.start_requested.connect(self.start_from_shortcut)
+        self.signals.immediate_play_requested.connect(self.start_immediate_play_from_shortcut)
         self.signals.play_stop_requested.connect(self.stop_play)
         self.signals.stop_requested.connect(self.force_stop)
         self.signals.toggle_overlay_requested.connect(self.toggle_overlay)
@@ -1592,6 +1717,9 @@ class MainWindow(QMainWindow):
         self.resize(int(self.config.get("width", 1080)), int(self.config.get("height", 720)))
         self.setMinimumSize(1000, 580)
         self.build_ui()
+        icon_path = ASSET_DIR / "app-icon.ico"
+        if icon_path.is_file():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self.signals.score_step_requested.connect(self.overlay.step_score)
         self.signals.overlay_lock_requested.connect(
             lambda: self.overlay.set_input_locked(not self.overlay.lock_button.isChecked()))
@@ -1664,6 +1792,79 @@ class MainWindow(QMainWindow):
                 shortcut.setContext(Qt.ApplicationShortcut)
                 shortcut.activated.connect(callback)
                 self.guide_shortcuts.append(shortcut)
+        self._register_immediate_play_hotkey()
+
+    def _remove_immediate_play_hotkey(self):
+        handle, self.immediate_play_hotkey_handle = self.immediate_play_hotkey_handle, None
+        if handle is not None:
+            try:
+                import keyboard
+                keyboard.remove_hotkey(handle)
+            except Exception:
+                pass
+            if handle in self.global_hotkey_handles:
+                self.global_hotkey_handles.remove(handle)
+        if self.immediate_play_shortcut is not None:
+            self.immediate_play_shortcut.setEnabled(False)
+            self.immediate_play_shortcut.deleteLater()
+            self.immediate_play_shortcut = None
+
+    def _register_immediate_play_hotkey(self):
+        self._remove_immediate_play_hotkey()
+        sequence = self.immediate_play_hotkey_edit.keySequence()
+        name = immediate_play_hotkey_name(sequence)
+        if not name:
+            self.immediate_play_hotkey_status.setText("立即播放快捷键已禁用。")
+            if hasattr(self, "immediate_play_hotkey_display"):
+                self.immediate_play_hotkey_display.setText("未设置")
+            return
+
+        label = sequence.toString(QKeySequence.PortableText)
+        if self.global_hotkeys_registered:
+            try:
+                import keyboard
+                handle = keyboard.add_hotkey(
+                    name, self.signals.immediate_play_requested.emit, suppress=False
+                )
+                self.immediate_play_hotkey_handle = handle
+                self.global_hotkey_handles.append(handle)
+                self.immediate_play_hotkey_status.setText(f"全局快捷键已绑定：{label}")
+            except Exception as exc:
+                self._create_immediate_play_qshortcut(sequence)
+                self.immediate_play_hotkey_status.setText(
+                    f"全局绑定失败，快捷键仅在程序前台有效：{label}（{exc}）"
+                )
+        else:
+            self._create_immediate_play_qshortcut(sequence)
+            self.immediate_play_hotkey_status.setText(f"快捷键仅在程序前台有效：{label}")
+        if hasattr(self, "immediate_play_hotkey_display"):
+            self.immediate_play_hotkey_display.setText(label)
+
+    def _create_immediate_play_qshortcut(self, sequence):
+        self.immediate_play_shortcut = QShortcut(sequence, self)
+        self.immediate_play_shortcut.setContext(Qt.ApplicationShortcut)
+        self.immediate_play_shortcut.setAutoRepeat(False)
+        self.immediate_play_shortcut.activated.connect(self.start_immediate_play_from_shortcut)
+
+    def on_immediate_play_hotkey_changed(self, sequence):
+        try:
+            immediate_play_hotkey_name(sequence)
+        except ValueError as exc:
+            with QSignalBlocker(self.immediate_play_hotkey_edit):
+                self.immediate_play_hotkey_edit.setKeySequence(
+                    QKeySequence(self.config.get("immediate_play_hotkey", "Ctrl+F10") or "")
+                )
+            self.immediate_play_hotkey_status.setText(str(exc))
+            return
+        self.config["immediate_play_hotkey"] = sequence.toString(QKeySequence.PortableText)
+        self._register_immediate_play_hotkey()
+        self.save_config()
+
+    def start_immediate_play_from_shortcut(self):
+        # Let the recorder capture its own key combination without starting playback.
+        if self.immediate_play_hotkey_edit.hasFocus():
+            return
+        self.start_play(immediate=True)
 
     def build_ui(self):
         shell = QWidget()
@@ -1712,7 +1913,7 @@ class MainWindow(QMainWindow):
 
         self.nav_play = add_nav("播放", QStyle.SP_MediaPlay, True, "曲库、试听与自动演奏")
         self.nav_compose = add_nav("制谱", QStyle.SP_FileDialogDetailedView, hint="键盘 / MIDI 制谱与分离录制")
-        self.nav_transcribe = add_nav("找谱", QStyle.SP_FileDialogListView, hint="在线搜索、本地导入、曲库更新与实时识曲")
+        self.nav_transcribe = add_nav("找谱", QStyle.SP_FileDialogListView, hint="Piastudy 网页教程、链接导入、本地导入、曲库更新与实时识曲")
         self.nav_practice = add_nav("练习", QStyle.SP_MediaVolume, hint="曲谱跟弹、初学者课程与练习教练")
         self.nav_game = add_nav("游戏", QStyle.SP_DesktopIcon, hint="悬浮琴谱、MIDI 接入光遇与手机同步")
         nav_layout.addStretch()
@@ -1787,13 +1988,47 @@ class MainWindow(QMainWindow):
         library_title.setObjectName("SectionTitle")
         self.song_count_label = QLabel("0 首")
         self.song_count_label.setObjectName("CountBadge")
+        self.playlist_manage_button = QToolButton()
+        self.playlist_manage_button.setText("歌单")
+        self.playlist_manage_button.setObjectName("CompactButton")
+        self.playlist_manage_button.setAccessibleName("歌单管理")
+        self.playlist_manage_button.setToolTip("创建、重命名或删除歌单")
+        self.playlist_menu = QMenu(self)
+        self.new_playlist_action = self.playlist_menu.addAction("新建歌单…")
+        self.rename_playlist_action = self.playlist_menu.addAction("重命名当前歌单…")
+        self.delete_playlist_action = self.playlist_menu.addAction("删除当前歌单…")
+        self.new_playlist_action.triggered.connect(lambda: self.create_playlist())
+        self.rename_playlist_action.triggered.connect(self.rename_current_playlist)
+        self.delete_playlist_action.triggered.connect(self.delete_current_playlist)
+        self.playlist_menu.aboutToShow.connect(self.update_playlist_menu_state)
+        self.playlist_manage_button.setMenu(self.playlist_menu)
+        self.playlist_manage_button.setPopupMode(QToolButton.InstantPopup)
         library_header.addWidget(library_title)
         library_header.addStretch()
+        library_header.addWidget(self.playlist_manage_button)
         library_header.addWidget(self.song_count_label)
         left_layout.addLayout(library_header)
         self.mode_tabs = QComboBox()
         self.mode_tabs.addItems(["全部曲谱", "收藏曲谱"])
         self.mode_tabs.currentTextChanged.connect(self.refresh_list)
+        self.playlist_filter = QComboBox()
+        self.playlist_filter.setAccessibleName("歌单筛选")
+        self.playlist_filter.currentIndexChanged.connect(self.refresh_list)
+        self.new_playlist_button = QToolButton()
+        self.new_playlist_button.setText("＋")
+        self.new_playlist_button.setToolTip("新建歌单")
+        self.new_playlist_button.setAccessibleName("新建歌单")
+        self.new_playlist_button.clicked.connect(self.create_playlist)
+        self.add_to_playlist_button = QToolButton()
+        self.add_to_playlist_button.setText("加入")
+        self.add_to_playlist_button.setToolTip("将当前歌曲加入所选歌单")
+        self.add_to_playlist_button.setAccessibleName("将歌曲加入歌单")
+        self.add_to_playlist_button.clicked.connect(self.add_selected_song_to_playlist)
+        playlist_row = QHBoxLayout()
+        playlist_row.addWidget(self.playlist_filter, 1)
+        playlist_row.addWidget(self.new_playlist_button)
+        playlist_row.addWidget(self.add_to_playlist_button)
+        self.refresh_playlist_choices()
         self.search = QLineEdit()
         self.search.setPlaceholderText("搜索歌名或文件名")
         self.search.setClearButtonEnabled(True)
@@ -1820,6 +2055,7 @@ class MainWindow(QMainWindow):
         self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self.show_song_menu)
         left_layout.addWidget(self.mode_tabs)
+        left_layout.addLayout(playlist_row)
         left_layout.addWidget(self.search)
         left_layout.addWidget(self.list_widget, 1)
         left_layout.addWidget(self.not_found_panel)
@@ -1849,8 +2085,29 @@ class MainWindow(QMainWindow):
         self.name_label.setWordWrap(True)
         self.song_summary_label = QLabel("—")
         self.song_summary_label.setObjectName("MutedText")
-        info_layout.addWidget(eyebrow)
-        info_layout.addWidget(self.name_label)
+        info_row = QHBoxLayout()
+        info_row.setSpacing(12)
+        cover_column = QVBoxLayout()
+        cover_column.setSpacing(4)
+        self.album_cover_label = AlbumCoverLabel(info)
+        self.album_cover_button = QToolButton()
+        self.album_cover_button.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        self.album_cover_button.setToolTip("重新寻找专辑封面")
+        self.album_cover_button.setAccessibleName("重新寻找专辑封面")
+        self.album_cover_button.clicked.connect(lambda: self.refresh_selected_album_art(force=True))
+        self.album_cover_status = QLabel("自动匹配封面")
+        self.album_cover_status.setObjectName("MutedText")
+        self.album_cover_status.setAlignment(Qt.AlignCenter)
+        self.album_cover_status.setWordWrap(True)
+        cover_column.addWidget(self.album_cover_label, 0, Qt.AlignHCenter)
+        cover_column.addWidget(self.album_cover_button, 0, Qt.AlignHCenter)
+        cover_column.addWidget(self.album_cover_status)
+        info_row.addLayout(cover_column)
+
+        title_details = QVBoxLayout()
+        title_details.setSpacing(4)
+        title_details.addWidget(eyebrow)
+        title_details.addWidget(self.name_label)
 
         info_grid = QGridLayout()
         info_grid.setHorizontalSpacing(18)
@@ -1872,7 +2129,9 @@ class MainWindow(QMainWindow):
             info_grid.addWidget(field, row, 0)
             info_grid.addWidget(widget, row, 1)
         info_grid.setColumnStretch(1, 1)
-        info_layout.addLayout(info_grid)
+        title_details.addLayout(info_grid)
+        info_row.addLayout(title_details, 1)
+        info_layout.addLayout(info_row)
         right.addWidget(info, 0)
 
         sound_section = QFrame()
@@ -2068,6 +2327,7 @@ class MainWindow(QMainWindow):
         inspector_layout.addWidget(shortcuts_title)
         for label_text, key_text in (
             ("开始演奏", "F7"),
+            ("立即播放", str(self.config.get("immediate_play_hotkey", "Ctrl+F10") or "未设置")),
             ("停止演奏", "F8"),
             ("显示 / 隐藏悬浮窗", "F3"),
             ("强制停止并释放按键", "ESC"),
@@ -2078,6 +2338,8 @@ class MainWindow(QMainWindow):
             key = QLabel(key_text)
             key.setObjectName("KeyCap")
             key.setAlignment(Qt.AlignCenter)
+            if label_text == "立即播放":
+                self.immediate_play_hotkey_display = key
             shortcut_row.addWidget(shortcut_label, 1)
             shortcut_row.addWidget(key)
             inspector_layout.addLayout(shortcut_row)
@@ -2159,6 +2421,43 @@ class MainWindow(QMainWindow):
         theme_layout.addWidget(self.theme_combo)
         help_layout.addWidget(help_title)
         help_layout.addWidget(theme_card)
+
+        hotkey_card = QFrame()
+        hotkey_card.setObjectName("Card")
+        hotkey_layout = QVBoxLayout(hotkey_card)
+        hotkey_layout.setContentsMargins(20, 18, 20, 18)
+        hotkey_layout.setSpacing(10)
+        hotkey_title = QLabel("立即播放快捷键")
+        hotkey_title.setObjectName("CardTitle")
+        hotkey_copy = QLabel("点击输入框后按下组合键即可设置；默认 Ctrl+F10，也可使用未占用的 F 键。清除后即可禁用。")
+        hotkey_copy.setObjectName("MutedText")
+        hotkey_copy.setWordWrap(True)
+        hotkey_row = QHBoxLayout()
+        self.immediate_play_hotkey_edit = QKeySequenceEdit()
+        self.immediate_play_hotkey_edit.setAccessibleName("立即播放快捷键")
+        self.immediate_play_hotkey_edit.setMaximumSequenceLength(1)
+        saved_hotkey = str(self.config.get("immediate_play_hotkey", "Ctrl+F10") or "")
+        saved_sequence = QKeySequence(saved_hotkey)
+        if saved_hotkey and saved_sequence.isEmpty():
+            saved_sequence = QKeySequence("Ctrl+F10")
+        try:
+            immediate_play_hotkey_name(saved_sequence)
+        except ValueError:
+            saved_sequence = QKeySequence("Ctrl+F10")
+        self.immediate_play_hotkey_edit.setKeySequence(saved_sequence)
+        self.immediate_play_hotkey_edit.keySequenceChanged.connect(self.on_immediate_play_hotkey_changed)
+        clear_hotkey_button = QPushButton("清除")
+        clear_hotkey_button.setObjectName("CompactButton")
+        clear_hotkey_button.clicked.connect(lambda: self.immediate_play_hotkey_edit.setKeySequence(QKeySequence()))
+        hotkey_row.addWidget(self.immediate_play_hotkey_edit, 1)
+        hotkey_row.addWidget(clear_hotkey_button)
+        self.immediate_play_hotkey_status = QLabel("快捷键将在程序启动时启用。")
+        self.immediate_play_hotkey_status.setObjectName("MutedText")
+        hotkey_layout.addWidget(hotkey_title)
+        hotkey_layout.addWidget(hotkey_copy)
+        hotkey_layout.addLayout(hotkey_row)
+        hotkey_layout.addWidget(self.immediate_play_hotkey_status)
+        help_layout.addWidget(hotkey_card)
 
         admin_card = QFrame()
         admin_card.setObjectName("Card")
@@ -2482,9 +2781,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         self.transcribe_tabs = QTabWidget()
         layout.addWidget(self.transcribe_tabs, 1)
-        self.transcribe_search = PiastudySearchPanel(self)
-        self.transcribe_search.setObjectName("TranscribePanel")
-        self.transcribe_tabs.addTab(self.transcribe_search, "在线搜索")
+        self.piastudy_tutorial = PiastudyTutorialPage(self)
+        self.piastudy_tutorial.setObjectName("TranscribePanel")
+        self.transcribe_tabs.addTab(self.piastudy_tutorial, "PiaStudy 扒谱教程")
+        self.piastudy_import_panel = PiastudyImportPanel(self)
+        self.piastudy_import_panel.setObjectName("TranscribePanel")
+        self.transcribe_tabs.addTab(self.piastudy_import_panel, "链接导入")
         for label, attribute in (("本地导入", "transcribe_import_layout"),
                                  ("曲库更新", "transcribe_update_layout")):
             page = QWidget()
@@ -3215,6 +3517,7 @@ class MainWindow(QMainWindow):
             QTabBar::tab { background: #0C1118; color: #98A3B4; padding: 10px 22px; }
             QTabBar::tab:selected { background: #151C27; color: #F5F7FB; border-bottom: 2px solid #5B86FF; }
             #NowPlayingSection { border: 0; }
+            #AlbumCover { background: #151C27; color: #ABC0FF; border: 1px solid #2B3445; border-radius: 6px; font-size: 38px; }
             #ProgressSection { border-top: 1px solid #2B3445; border-bottom: 1px solid #2B3445; }
             #SettingsSection { border: 0; }
             #EffectsSection { border-left: 1px solid #2B3445; }
@@ -3358,10 +3661,129 @@ class MainWindow(QMainWindow):
                     haystack += " " + self.search_index.text_for(filename)
                 if all(token in haystack for token in tokens):
                     matched.append(filename)
-            return matched
-        if self.mode_tabs.currentText() == "收藏曲谱":
+            files = matched
+        elif self.mode_tabs.currentText() == "收藏曲谱":
             files = [f for f in files if f in self.favorites]
+        playlist_name = self.playlist_filter.currentData() if hasattr(self, "playlist_filter") else None
+        if playlist_name:
+            members = {filename.casefold() for filename in self.playlists.get(playlist_name, [])}
+            files = [filename for filename in files if filename.casefold() in members]
         return files
+
+    def refresh_playlist_choices(self):
+        if not hasattr(self, "playlist_filter"):
+            return
+        selected = self.playlist_filter.currentData()
+        blocker = QSignalBlocker(self.playlist_filter)
+        self.playlist_filter.clear()
+        self.playlist_filter.addItem("全部歌单", None)
+        for name in self.playlists:
+            self.playlist_filter.addItem(name, name)
+        index = self.playlist_filter.findData(selected) if selected else 0
+        self.playlist_filter.setCurrentIndex(max(index, 0))
+        del blocker
+        self.add_to_playlist_button.setEnabled(bool(self.playlist_filter.currentData()))
+
+    def create_playlist(self, name=None):
+        if name is None:
+            name, accepted = QInputDialog.getText(self, "新建歌单", "歌单名称：")
+            if not accepted:
+                return False
+        return self.create_playlist_named(name)
+
+    def create_playlist_named(self, name):
+        try:
+            self.playlists = create_playlist_data(self.playlists, name)
+        except ValueError as exc:
+            QMessageBox.information(self, "无法创建歌单", str(exc))
+            return False
+        save_playlists(PLAYLISTS_FILE, self.playlists)
+        self.refresh_playlist_choices()
+        self.playlist_filter.setCurrentIndex(self.playlist_filter.findData(str(name).strip()))
+        self.refresh_list()
+        self.set_status(f"已创建歌单：{str(name).strip()}")
+        return True
+
+    def rename_current_playlist(self):
+        old_name = self.playlist_filter.currentData()
+        if not old_name:
+            return
+        new_name, accepted = QInputDialog.getText(
+            self, "重命名歌单", "歌单名称：", text=old_name,
+        )
+        if not accepted:
+            return
+        try:
+            self.playlists = rename_playlist_data(self.playlists, old_name, new_name)
+        except ValueError as exc:
+            QMessageBox.information(self, "无法重命名歌单", str(exc))
+            return
+        save_playlists(PLAYLISTS_FILE, self.playlists)
+        self.refresh_playlist_choices()
+        self.playlist_filter.setCurrentIndex(self.playlist_filter.findData(new_name.strip()))
+        self.refresh_list()
+
+    def delete_current_playlist(self):
+        name = self.playlist_filter.currentData()
+        if not name:
+            return
+        answer = QMessageBox.question(
+            self, "删除歌单", f"删除歌单“{name}”？其中歌曲不会从曲库删除。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.playlists.pop(name, None)
+        save_playlists(PLAYLISTS_FILE, self.playlists)
+        self.refresh_playlist_choices()
+        self.refresh_list()
+
+    def update_playlist_menu_state(self):
+        has_playlist = bool(self.playlist_filter.currentData())
+        self.rename_playlist_action.setEnabled(has_playlist)
+        self.delete_playlist_action.setEnabled(has_playlist)
+
+    def add_selected_song_to_playlist(self):
+        name = self.playlist_filter.currentData()
+        if not self.selected_file:
+            self.set_status("请先选择一首歌曲")
+            return False
+        if not name:
+            self.set_status("请先选择或新建歌单")
+            return False
+        return self.add_song_to_playlist(self.selected_file, name)
+
+    def add_song_to_playlist(self, filename, name):
+        if filename not in self.all_files:
+            return False
+        try:
+            self.playlists = set_song_membership(self.playlists, name, filename, True)
+        except ValueError as exc:
+            QMessageBox.information(self, "无法加入歌单", str(exc))
+            return False
+        save_playlists(PLAYLISTS_FILE, self.playlists)
+        self.refresh_list()
+        self.set_status(f"已将《{self.display_song_name(filename)}》加入歌单“{name}”")
+        return True
+
+    def create_playlist_and_add_song(self, filename):
+        if filename not in self.all_files:
+            return False
+        name, accepted = QInputDialog.getText(self, "新建歌单", "歌单名称：")
+        if not accepted:
+            return False
+        try:
+            self.playlists = create_playlist_data(self.playlists, name, song=filename)
+        except ValueError as exc:
+            QMessageBox.information(self, "无法创建歌单", str(exc))
+            return False
+        name = str(name).strip()
+        save_playlists(PLAYLISTS_FILE, self.playlists)
+        self.refresh_playlist_choices()
+        self.playlist_filter.setCurrentIndex(self.playlist_filter.findData(name))
+        self.refresh_list()
+        self.set_status(f"已创建歌单“{name}”并加入《{self.display_song_name(filename)}》")
+        return True
 
     def refresh_list(self):
         self.midi_practice.set_library(self.all_files, self.display_song_name)
@@ -3374,6 +3796,8 @@ class MainWindow(QMainWindow):
             visible_text = f"{visible / 1000:.1f}k" if visible >= 10000 else f"{visible:,}"
             count = f"{total_text} 首" if visible == total else f"{visible_text} / {total_text} 首"
             self.song_count_label.setText(count)
+        if hasattr(self, "add_to_playlist_button"):
+            self.add_to_playlist_button.setEnabled(bool(self.playlist_filter.currentData()))
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
         for filename in self.display_files:
@@ -3390,7 +3814,7 @@ class MainWindow(QMainWindow):
         query = self.search.text().strip()
         self.not_found_panel.setVisible(bool(query and not self.display_files))
         if query and not self.display_files:
-            self.piastudy_search_btn.setToolTip(f"搜索：{query}")
+            self.piastudy_search_btn.setToolTip(f"在 PiaStudy 网页搜索：{query}")
         if hasattr(self, "overlay") and self.overlay.isVisible():
             self.overlay.refresh()
 
@@ -3404,6 +3828,20 @@ class MainWindow(QMainWindow):
         action = QAction(label, menu)
         action.triggered.connect(lambda: self.toggle_favorite(filename))
         menu.addAction(action)
+        menu.addSeparator()
+        add_to_playlist = menu.addMenu("加入歌单")
+        if self.playlists:
+            for name in self.playlists:
+                playlist_action = add_to_playlist.addAction(name)
+                playlist_action.triggered.connect(
+                    lambda _checked=False, playlist_name=name: self.add_song_to_playlist(filename, playlist_name)
+                )
+        else:
+            add_to_playlist.setEnabled(False)
+        new_playlist_action = add_to_playlist.addAction("新建歌单并加入…")
+        new_playlist_action.triggered.connect(
+            lambda _checked=False: self.create_playlist_and_add_song(filename)
+        )
         menu.addSeparator()
         delete_action = menu.addAction("删除曲谱…")
         delete_action.setEnabled(not self.update_running)
@@ -3438,6 +3876,13 @@ class MainWindow(QMainWindow):
         if self.selected_file == filename:
             self.clear_selected_song()
         self.favorites.discard(filename)
+        playlists_changed = False
+        for songs in self.playlists.values():
+            retained = [song for song in songs if song.casefold() != filename.casefold()]
+            playlists_changed |= len(retained) != len(songs)
+            songs[:] = retained
+        if playlists_changed:
+            save_playlists(PLAYLISTS_FILE, self.playlists)
         self.speed_presets.pop(filename, None)
         self.playback_positions.pop(filename, None)
         self.saved_song_sections.pop(filename, None)
@@ -3466,6 +3911,8 @@ class MainWindow(QMainWindow):
             self.sections_dialog.hide()
         self.bpm = 120
         self.name_label.setText("请选择一首乐谱")
+        self.album_cover_label.show_placeholder("♫")
+        self.album_cover_status.setText("自动匹配封面")
         self.song_summary_label.setText("—")
         for label in (self.author_label, self.transcribed_label, self.filename_label):
             label.setText("—")
@@ -3539,6 +3986,7 @@ class MainWindow(QMainWindow):
         self.filename_label.setText(self.display_song_name(filename))
         self.song_summary_label.setText(f"{len(notes):,} 个音符")
         self.overlay.song_label.setText(self.name_label.text() or Path(filename).stem)
+        self.refresh_selected_album_art()
         self.update_game_score()
         self.apply_speed_preset(filename)
         self.on_speed_changed()
@@ -3558,6 +4006,51 @@ class MainWindow(QMainWindow):
         self.remember_position()
         self.save_config()
 
+    def refresh_selected_album_art(self, *, force=False):
+        filename = self.selected_file
+        if not filename:
+            self.album_cover_label.show_placeholder("♫")
+            self.album_cover_status.setText("自动匹配封面")
+            return
+        title = clean_song_name(self.meta.get("songName") or self.meta.get("name")) or self.display_song_name(filename)
+        artist = str(
+            self.meta.get("artist") or self.meta.get("artistName") or self.meta.get("originalArtist") or ""
+        ).strip()
+        self.album_art_generation += 1
+        generation = self.album_art_generation
+        self.album_cover_label.show_placeholder("♫")
+        self.album_cover_status.setText("正在寻找封面…")
+
+        def worker():
+            try:
+                result = album_art.find_album_art(title, artist, ALBUM_ART_CACHE_DIR, force=force)
+                self.album_art_signals.finished.emit(generation, result, "")
+            except Exception as exc:
+                self.album_art_signals.finished.emit(generation, None, str(exc))
+
+        threading.Thread(target=worker, name="AlbumArtworkSearch", daemon=True).start()
+
+    def on_album_art_finished(self, generation, result, error):
+        if generation != self.album_art_generation or not self.selected_file:
+            return
+        if error:
+            self.album_cover_label.show_placeholder("♫")
+            self.album_cover_status.setText("封面搜索失败")
+            self.album_cover_status.setToolTip(error)
+            return
+        if not result or not result.get("image_path"):
+            self.album_cover_label.show_placeholder("♫")
+            self.album_cover_status.setText("暂无匹配封面")
+            self.album_cover_status.setToolTip("可点刷新按钮重新搜索")
+            return
+        if not self.album_cover_label.set_image(result["image_path"]):
+            self.album_cover_status.setText("封面文件无法显示")
+            return
+        album = str(result.get("album") or "").strip()
+        artist = str(result.get("artist") or "").strip()
+        self.album_cover_status.setText(" · ".join(value for value in (album, artist) if value) or "匹配到封面")
+        self.album_cover_status.setToolTip(f"自动匹配分数：{float(result.get('score', 0)):.0%}")
+
     def overlay_song_files(self):
         if self.overlay_mode == "收藏":
             return [f for f in self.all_files if f in self.favorites]
@@ -3565,14 +4058,27 @@ class MainWindow(QMainWindow):
 
     def open_piastudy_search(self, query=""):
         self.show_transcribe()
-        self.transcribe_tabs.setCurrentIndex(0)
         query = (query or "").strip()
-        if query.lower().startswith(("https://piastudy.com/", "http://piastudy.com/", "https://www.piastudy.com/", "http://www.piastudy.com/")):
-            self.transcribe_search.url_box.setText(query)
-            self.transcribe_search.url_box.setFocus()
+        piastudy_prefixes = (
+            "https://piastudy.com/", "http://piastudy.com/",
+            "https://www.piastudy.com/", "http://www.piastudy.com/",
+        )
+        if query.lower().startswith(piastudy_prefixes):
+            path = QUrl(query).path().lower()
+            if path.startswith("/searchresults/") or path.rstrip("/").lower() == "/searchresults":
+                self.transcribe_tabs.setCurrentIndex(0)
+                self.piastudy_tutorial.set_search_query("")
+                if not QDesktopServices.openUrl(QUrl(query)):
+                    self.piastudy_tutorial.search_hint_label.setText("无法打开浏览器，请手动访问 PiaStudy 搜索页。")
+                    self.piastudy_tutorial.search_hint_label.show()
+            else:
+                self.transcribe_tabs.setCurrentIndex(1)
+                self.piastudy_import_panel.url_box.setText(query)
+                self.piastudy_import_panel.url_box.setFocus()
         else:
-            self.transcribe_search.search_box.setText(query)
-            self.transcribe_search.search_box.setFocus()
+            self.transcribe_tabs.setCurrentIndex(0)
+            self.piastudy_tutorial.set_search_query(query)
+            self.piastudy_tutorial.open_website()
 
     def choose_midi_import(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -3588,7 +4094,7 @@ class MainWindow(QMainWindow):
         self.update_task_kind = "midi"
         self.set_update_controls_enabled(False)
         self.show_transcribe()
-        self.transcribe_tabs.setCurrentIndex(1)
+        self.transcribe_tabs.setCurrentIndex(2)
         self.set_task_progress_range(0, 0)
         self.set_task_status(f"正在转换：{midi_path.name}")
         threading.Thread(
@@ -4338,7 +4844,7 @@ class MainWindow(QMainWindow):
             return
         event.acceptProposedAction()
         self.show_transcribe()
-        self.transcribe_tabs.setCurrentIndex(1)
+        self.transcribe_tabs.setCurrentIndex(2)
         self.start_manual_import(paths)
 
     def resizeEvent(self, event):
@@ -4621,6 +5127,10 @@ class MainWindow(QMainWindow):
             "overlay_music_mode": self.overlay_mode,
             "admin_mode": self.admin_mode,
             "admin_tip_count": self.admin_tip_count,
+            "immediate_play_hotkey": (
+                self.immediate_play_hotkey_edit.keySequence().toString(QKeySequence.PortableText)
+                if hasattr(self, "immediate_play_hotkey_edit") else self.config.get("immediate_play_hotkey", "Ctrl+F10")
+            ),
             "sky_sound_id": self.sky_sound_id,
             "score_input_mode": self.score_editor.input_mode.currentData(),
             "sky_location": self.sky_location,

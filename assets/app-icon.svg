@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="30" y1="20" x2="220" y2="238" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14273A"/>
+      <stop offset="1" stop-color="#09131F"/>
+    </linearGradient>
+    <linearGradient id="aurora" x1="61" y1="53" x2="204" y2="178" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7EF4D1"/>
+      <stop offset=".53" stop-color="#38C7D7"/>
+      <stop offset="1" stop-color="#568BFF"/>
+    </linearGradient>
+    <linearGradient id="keybed" x1="50" y1="150" x2="206" y2="212" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBFFFF"/>
+      <stop offset="1" stop-color="#C7E6EC"/>
+    </linearGradient>
+    <filter id="shadow" x="25" y="28" width="206" height="207" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#tile)"/>
+  <circle cx="128" cy="116" r="79" fill="url(#aurora)" opacity=".16"/>
+  <path d="M53 119c14-39 53-68 91-62 23 4 45 22 56 45" fill="none" stroke="url(#aurora)" stroke-linecap="round" stroke-width="8" opacity=".84"/>
+  <path d="M64 132c19 25 47 39 76 34 23-4 42-18 53-38" fill="none" stroke="#72E8D5" stroke-linecap="round" stroke-width="4" opacity=".42"/>
+  <circle cx="58" cy="118" r="6" fill="#8FFFE2"/>
+  <circle cx="201" cy="97" r="5" fill="#7BD4FF"/>
+  <ellipse cx="128" cy="210" rx="83" ry="12" fill="#000814" opacity=".42" filter="url(#shadow)"/>
+  <g fill="none" stroke="#E7FFFB" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M133 70v54" stroke-width="11"/>
+    <path d="M133 73c19-3 31 3 37 15-12-5-24-4-37 2" stroke-width="10"/>
+    <ellipse cx="119" cy="132" rx="15" ry="10" transform="rotate(-24 119 132)" fill="#E7FFFB" stroke="none"/>
+  </g>
+  <g>
+    <rect x="45" y="151" width="166" height="65" rx="13" fill="#06121F" opacity=".4" transform="translate(0 4)"/>
+    <rect x="45" y="147" width="166" height="65" rx="13" fill="url(#keybed)"/>
+    <path d="M78 149v61M111 149v61M144 149v61M177 149v61" stroke="#7DA4AC" stroke-width="2.5"/>
+    <path d="M69 148h14v28H69zM102 148h14v28h-14zM135 148h14v28h-14zM168 148h14v28h-14z" fill="#162A3B"/>
+    <path d="M69 176h14M102 176h14M135 176h14M168 176h14" stroke="#6A8E98" stroke-width="2"/>
+    <path d="M52 197h152" stroke="#A8D0D8" stroke-width="2" opacity=".68"/>
+  </g>
+</svg>

@@ -16,6 +16,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed' }
     $version = ($metadata | ConvertFrom-Json).version
     $fileVersion = "$version.0"
+    & python tools/build_app_icon.py
+    if ($LASTEXITCODE -ne 0) { throw 'Application icon generation failed' }
     if (-not $InnoCompiler) {
         $InnoCompiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
     }
@@ -26,6 +28,7 @@ try {
     $compileArgs = @(
         '-m', 'nuitka', '--standalone', '--enable-plugin=pyside6',
         '--include-qt-plugins=sensible,multimedia', '--windows-console-mode=disable',
+        "--windows-icon-from-ico=$(Join-Path $root 'assets/app-icon.ico')",
         '--include-package=keyboard', '--nofollow-import-to=keyboard._keyboard_tests,keyboard._mouse_tests',
         '--include-data-dir=assets=assets', '--output-filename=SkyAutoMusic.exe',
         "--output-dir=$outputPath", "--report=$outputPath/compilation-report.xml",
